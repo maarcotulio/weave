@@ -43,7 +43,7 @@ The first launch can create or open a project directory. The starter project con
 
 ## Worldbuilding
 
-- The left navigation has separate **Manuscript** and **Worldbuilding** workspaces. Switching workspaces preserves the selected Manuscript story, chapter, and scene.
+- Exactly one global left sidebar has separate **Manuscript** and **Worldbuilding** workspaces. When Worldbuilding is active, that same sidebar lists all local notes and user-created canvases; the main area has no second navigation sidebar. Switching workspaces preserves the selected Manuscript story, chapter, and scene and retains open Worldbuilding tabs.
 - Worldbuilding contains only persisted local Markdown notes and explicitly user-created note canvases. Notes use only exact `[[Note title]]` and `[[Note title|label]]` syntax; normal prose is never heuristically parsed. Targets resolve only to a unique local note title and unresolved links remain repairable.
 - Notes and canvases open in independently closable, accessible in-content tabs. Closing a tab never changes its underlying note or canvas. With no open tab, the workspace offers only **Create new note**, **Create new canva**, and **Close**; Close returns to Manuscript without changing content.
 - React Flow canvases are separately created per selected story and contain Markdown-note nodes only. Resolved wiki links become canvas edges when both notes are placed; no freehand, relationship, scene, or automatic node model exists. Node positions and viewport persist separately from note Markdown. The keyboard-accessible outline mirrors every node and resolved edge, and Home fits the graph.

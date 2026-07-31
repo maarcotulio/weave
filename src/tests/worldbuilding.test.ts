@@ -108,11 +108,14 @@ describe('offline persistence and accessible workspace', () => {
     expect(component).toContain('Canvas outline');
     expect(component).toContain('Keyboard-accessible list of every note node and resolved wiki-link edge.');
     expect(component).toContain('[[Note title|label]]');
-    expect(component).toContain('Create new note</button><button type="button" onClick={() => void createCanvas()}>Create new canva</button><button type="button" onClick={onClose}>Close');
+    expect(component).toContain('Create new note</button><button type="button" onClick={() => void createCanvas()}>Create new canva</button><button type="button" onClick={onReturnToManuscript}>Close');
+    expect(component).not.toContain('worldbuilding-nav');
     expect(component).not.toContain('Create typed relationship');
     expect(component).not.toContain('Anchored, not parsed');
     const app = readFileSync(join(process.cwd(), 'src/app/App.tsx'), 'utf8');
     expect(app).toContain('Primary workspaces');
-    expect(app).toContain('onClose={() => setWorkspaceMode(\'writing\')}');
+    expect(app).toContain('worldbuilding-sidebar-group');
+    expect(app).toContain('worldbuildingTabs');
+    expect(app).toContain('onReturnToManuscript={() => setWorkspaceMode(\'writing\')}');
   });
 });
