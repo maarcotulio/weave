@@ -40,8 +40,44 @@ export interface PaginatedPage {
   document: StructuredDocument;
 }
 
+export type CaretAffinity = 'forward' | 'backward';
+
+export interface PageCaretPosition {
+  pageIndex: number;
+  blockId: string;
+  sourceBlockId: string;
+  offset: number;
+}
+
 export function pageDimensions(pageSize: PageSize = 'letter'): PageDimensions {
   return PAGE_DIMENSIONS[pageSize] ?? PAGE_DIMENSIONS.letter;
+}
+
+export function pageOffsetToCanonical(metadata: PageFragmentMetadata | undefined, localOffset: number, fragmentLength?: number): number {
+  if (!metadata) return Math.max(0, localOffset);
+  const length = fragmentLength ?? metadata.end - metadata.start;
+  return metadata.start + Math.max(0, Math.min(localOffset, length));
+}
+
+export function canonicalOffsetToPage(pages: readonly PaginatedPage[], sourceBlockId: string, canonicalOffset: number, affinity: CaretAffinity = 'forward'): PageCaretPosition | undefined {
+  const fragments = pages.flatMap((page, pageIndex) => page.document.blocks.map((candidate) => ({ pageIndex, block: candidate as PaginatedBlock, metadata: (candidate as PaginatedBlock).pagination }))).filter((item): item is { pageIndex: number; block: PaginatedBlock; metadata: PageFragmentMetadata } => item.metadata?.sourceBlockId === sourceBlockId).sort((left, right) => left.metadata.sequence - right.metadata.sequence);
+  if (!fragments.length) return undefined;
+  const maximum = fragments[fragments.length - 1].metadata.end;
+  const offset = Math.max(0, Math.min(canonicalOffset, maximum));
+  if (offset <= fragments[0].metadata.start) return { pageIndex: fragments[0].pageIndex, blockId: fragments[0].block.id, sourceBlockId, offset: 0 };
+  if (affinity === 'backward') {
+    for (let index = fragments.length - 1; index >= 0; index -= 1) {
+      const fragment = fragments[index];
+      if (offset > fragment.metadata.start && offset <= fragment.metadata.end) return { pageIndex: fragment.pageIndex, blockId: fragment.block.id, sourceBlockId, offset: offset - fragment.metadata.start };
+    }
+  } else {
+    for (const fragment of fragments) {
+      if (offset >= fragment.metadata.start && offset < fragment.metadata.end) return { pageIndex: fragment.pageIndex, blockId: fragment.block.id, sourceBlockId, offset: offset - fragment.metadata.start };
+      if (offset === fragment.metadata.start && fragment.metadata.start === fragment.metadata.end) return { pageIndex: fragment.pageIndex, blockId: fragment.block.id, sourceBlockId, offset: 0 };
+    }
+  }
+  const last = fragments[fragments.length - 1];
+  return { pageIndex: last.pageIndex, blockId: last.block.id, sourceBlockId, offset: last.metadata.end - last.metadata.start };
 }
 
 export function pageTextHeight(pageSize: PageSize = 'letter'): number {

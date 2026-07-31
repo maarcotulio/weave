@@ -19,5 +19,7 @@ describe('writing page layout', () => {
     expect(app).toContain('sidebar-toggle');
     expect(app).toContain('function Modal');
     expect(app).toContain('paginateDocument');
+    expect(app).toContain('data-page-block-id');
+    expect(app).toContain('canonicalOffsetToPage');
   });
 });
