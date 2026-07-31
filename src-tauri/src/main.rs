@@ -51,7 +51,7 @@ struct BackupRecord { id: String, path: String, created_at: String, integrity: S
 struct OperationStatus { state: String, message: String, at: String }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct EditorStyleProfile { font_family: String, font_size_pt: f64, line_spacing: String }
+struct EditorStyleProfile { font_family: String, font_size_pt: f64, line_spacing: String, #[serde(default = "default_page_size")] page_size: String }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WritingGoals { daily_target: i64, daily_word_counts: std::collections::HashMap<String, i64> }
@@ -82,7 +82,8 @@ struct IntegrityReport { ok: bool, message: String, checked_at: String }
 #[serde(rename_all = "camelCase")]
 struct SplitResult { scene_set: SceneSet, scenes: Vec<Scene>, source_revision_id: String }
 
-fn default_style_profile() -> EditorStyleProfile { EditorStyleProfile { font_family: "Times New Roman".into(), font_size_pt: 12.0, line_spacing: "double".into() } }
+fn default_page_size() -> String { "letter".into() }
+fn default_style_profile() -> EditorStyleProfile { EditorStyleProfile { font_family: "Times New Roman".into(), font_size_pt: 12.0, line_spacing: "double".into(), page_size: default_page_size() } }
 fn default_writing_goals() -> WritingGoals { WritingGoals { daily_target: 500, daily_word_counts: std::collections::HashMap::new() } }
 impl Default for OperationStatus { fn default() -> Self { Self { state: "idle".into(), message: "Ready".into(), at: timestamp() } } }
 impl Default for Store { fn default() -> Self { Self { project: None, stories: vec![], chapters: vec![], scene_sets: vec![], scenes: vec![], documents: vec![], drafts: vec![], backups: vec![], style_profile: default_style_profile(), writing_goals: default_writing_goals(), status: OperationStatus::default() } } }
@@ -190,7 +191,7 @@ fn compose_chapter(chapter_id: String, app: State<'_, Mutex<AppState>>) -> Resul
 #[tauri::command]
 fn get_style_profile(app: State<'_, Mutex<AppState>>) -> Result<EditorStyleProfile, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; Ok(state.store.style_profile.clone()) }
 #[tauri::command]
-fn update_style_profile(profile: EditorStyleProfile, app: State<'_, Mutex<AppState>>) -> Result<EditorStyleProfile, String> { if profile.font_family.trim().is_empty() { return Err("Font family is required".into()); } if !(8.0..=72.0).contains(&profile.font_size_pt) { return Err("Font size must be between 8 and 72 pt".into()); } if !["single", "1.15", "1.5", "double"].contains(&profile.line_spacing.as_str()) { return Err("Unsupported line spacing".into()); } let mut state = app.lock().map_err(|_| "Project lock poisoned")?; state.store.style_profile = profile.clone(); status(&mut state, "saved", "Writing style saved"); state.persist()?; Ok(profile) }
+fn update_style_profile(profile: EditorStyleProfile, app: State<'_, Mutex<AppState>>) -> Result<EditorStyleProfile, String> { if profile.font_family.trim().is_empty() { return Err("Font family is required".into()); } if !(8.0..=72.0).contains(&profile.font_size_pt) { return Err("Font size must be between 8 and 72 pt".into()); } if !["single", "1.15", "1.5", "double"].contains(&profile.line_spacing.as_str()) { return Err("Unsupported line spacing".into()); } if !["letter", "a4", "legal"].contains(&profile.page_size.as_str()) { return Err("Unsupported page size".into()); } let mut state = app.lock().map_err(|_| "Project lock poisoned")?; state.store.style_profile = profile.clone(); status(&mut state, "saved", "Writing style saved"); state.persist()?; Ok(profile) }
 #[tauri::command]
 fn writing_stats(app: State<'_, Mutex<AppState>>) -> Result<WritingStats, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; Ok(make_writing_stats(&state.store)) }
 #[tauri::command]

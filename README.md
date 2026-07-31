@@ -18,7 +18,9 @@ The first launch can create or open a project directory. The starter project con
 
 ## Writing experience
 
-- The editor uses a responsive, document-sized page with comfortable margins. Font family, font size, and line spacing are available above the page and saved in the project style profile; they remain separate from canonical structured document JSON and are applied to PDF/DOCX exports.
+- The editor uses a responsive, document-sized page stack with comfortable margins. Long manuscripts flow across true page boundaries without an inner editor scroll region. The sidebar can collapse for more writing room.
+- Font family, font size, line spacing, and page size (US Letter, A4, or US Legal) are available above the page and saved in the project style profile; they remain separate from canonical structured document JSON and are applied to PDF/DOCX exports.
+- Project and scene naming use reusable modal dialogs; canceling a dialog leaves the current manuscript untouched.
 - Writing saves automatically after a short typing pause. The saved/saving/error indicator stays visible, failed edits remain dirty for retry, and navigation, mode changes, exports, backups, and app close flush pending saves.
 - The goals panel shows the local-calendar-day word target/progress and the project total. The target is persisted. Project totals count one active source per chapter: an open continuous draft replaces its scene set for counting; kept-separate/split drafts are historical and are not double-counted.
 

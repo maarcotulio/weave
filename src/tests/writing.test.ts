@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AutosaveController } from '../domain/autosave';
 import { documentFromText } from '../domain/document';
 import { countDocumentWords, localCalendarDate } from '../domain/goals';
+import { pageDimensions, paginateDocument } from '../domain/pagination';
 import { InMemoryProjectRepository } from '../domain/repository';
 import { DEFAULT_EDITOR_STYLE, type StructuredDocument } from '../domain/types';
 import { SQLiteProjectRepository } from '../infrastructure/sqlite-repository';
@@ -25,7 +26,7 @@ describe('writing style and goals', () => {
     const { repository, chapter, first } = await fixture();
     expect((await repository.snapshot()).styleProfile).toEqual(DEFAULT_EDITOR_STYLE);
     const style = { fontFamily: 'Georgia', fontSizePt: 14, lineSpacing: '1.5' as const };
-    expect(await repository.updateStyleProfile(style)).toEqual(style);
+    expect(await repository.updateStyleProfile(style)).toEqual({ ...style, pageSize: 'letter' });
     const initial = await repository.getWritingStats();
     expect(initial.projectWords).toBe(3);
 
@@ -57,14 +58,25 @@ describe('writing style and goals', () => {
     vi.useRealTimers();
   });
 
+  it('paginates long manuscripts without changing canonical blocks and respects page size', () => {
+    const document = documentFromText(Array.from({ length: 80 }, (_, index) => `Paragraph ${index} with enough words to occupy the writing page.`).join('\n'));
+    const style = { ...DEFAULT_EDITOR_STYLE, pageSize: 'a4' as const };
+    const pages = paginateDocument(document, style);
+    expect(pages.length).toBeGreaterThan(1);
+    expect(pages.flatMap((page) => page.blocks).map((block) => block.id)).toEqual(document.blocks.map((block) => block.id));
+    expect(pageDimensions('a4').label).toBe('A4');
+    expect(pageDimensions('a4').heightPx).toBeGreaterThan(pageDimensions('letter').heightPx);
+  });
+
   it('uses the style profile in visual exports', () => {
     const document: StructuredDocument = documentFromText('A page');
     const revision = { id: 'r', documentId: 'd', number: 1, document, createdAt: new Date().toISOString(), reason: 'edit' as const };
-    const file = exportCapturedRevision(revision, 'docx', { title: 'Draft', styleProfile: { fontFamily: 'Arial', fontSizePt: 16, lineSpacing: '1.5' } });
+    const file = exportCapturedRevision(revision, 'docx', { title: 'Draft', styleProfile: { fontFamily: 'Arial', fontSizePt: 16, lineSpacing: '1.5', pageSize: 'a4' } });
     const packageBytes = new TextDecoder().decode(file.bytes);
     expect(packageBytes).toContain('Arial');
     expect(packageBytes).toContain('w:val="32"');
     expect(packageBytes).toContain('w:line="360"');
+    expect(packageBytes).toContain('w:w="11900"');
     expect(countDocumentWords(document)).toBe(2);
   });
 });
@@ -104,11 +116,11 @@ describe('SQLite writing preferences', () => {
     directory = await mkdtemp(join(tmpdir(), 'weave-writing-'));
     const repository = new SQLiteProjectRepository(directory);
     await repository.createProject(directory, 'SQLite writing');
-    await repository.updateStyleProfile({ fontFamily: 'Courier New', fontSizePt: 11, lineSpacing: 'single' });
+    await repository.updateStyleProfile({ fontFamily: 'Courier New', fontSizePt: 11, lineSpacing: 'single', pageSize: 'a4' });
     await repository.setDailyWordTarget(900);
     repository.close();
     const reopened = new SQLiteProjectRepository(directory);
-    expect(await reopened.getStyleProfile()).toEqual({ fontFamily: 'Courier New', fontSizePt: 11, lineSpacing: 'single' });
+    expect(await reopened.getStyleProfile()).toEqual({ fontFamily: 'Courier New', fontSizePt: 11, lineSpacing: 'single', pageSize: 'a4' });
     expect((await reopened.getWritingStats()).dailyTarget).toBe(900);
     reopened.close();
   });

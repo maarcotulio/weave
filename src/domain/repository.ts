@@ -249,7 +249,7 @@ export class InMemoryProjectRepository implements ProjectRepository {
 
   async updateStyleProfile(profile: EditorStyleProfile): Promise<EditorStyleProfile> {
     this.validateStyleProfile(profile);
-    this.state.styleProfile = deepClone(profile);
+    this.state.styleProfile = { ...DEFAULT_EDITOR_STYLE, ...deepClone(profile), pageSize: profile.pageSize ?? DEFAULT_EDITOR_STYLE.pageSize };
     this.touchProject();
     this.state.status = { state: 'saved', message: 'Writing style saved', at: now() };
     return deepClone(this.state.styleProfile);
@@ -412,6 +412,7 @@ export class InMemoryProjectRepository implements ProjectRepository {
     if (!profile.fontFamily.trim()) throw new Error('Font family is required');
     if (!Number.isFinite(profile.fontSizePt) || profile.fontSizePt < 8 || profile.fontSizePt > 72) throw new Error('Font size must be between 8 and 72 pt');
     if (!['single', '1.15', '1.5', 'double'].includes(profile.lineSpacing)) throw new Error('Unsupported line spacing');
+    if (profile.pageSize !== undefined && !['letter', 'a4', 'legal'].includes(profile.pageSize)) throw new Error('Unsupported page size');
   }
 
   protected addDocument(document: StructuredDocument, reason: Revision['reason']): DocumentRecord {

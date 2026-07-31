@@ -1,11 +1,13 @@
 import type { ProjectRepository } from '../domain/repository';
 import { blockText } from '../domain/document';
+import { pageDimensions } from '../domain/pagination';
 import { DEFAULT_EDITOR_STYLE, type DocumentBlock, type EditorStyleProfile, type ExportFormat, type ExportOptions, type ExportedFile, type Revision, type StructuredDocument, type TextRun } from '../domain/types';
 
 export const EDITORIAL_TEMPLATE = Object.freeze({
   fontFamily: 'Times New Roman',
   fontSizePt: 12,
   lineSpacing: 'double',
+  pageSize: 'letter',
   header: 'title',
   pageNumbering: true
 });
@@ -59,7 +61,7 @@ function lineSpacingTwips(profile: EditorStyleProfile): number {
 }
 
 function effectiveStyle(options: ExportOptions): EditorStyleProfile {
-  return options.styleProfile ?? DEFAULT_EDITOR_STYLE;
+  return { ...DEFAULT_EDITOR_STYLE, ...(options.styleProfile ?? {}) };
 }
 
 function renderWordRun(run: TextRun, profile: EditorStyleProfile): string {
@@ -89,7 +91,8 @@ function xmlFiles(document: StructuredDocument, options: ExportOptions): Map<str
   const documentRelationships = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/></Relationships>`;
   const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${escapeXml(profile.fontFamily)}" w:hAnsi="${escapeXml(profile.fontFamily)}"/><w:sz w:val="${Math.round(profile.fontSizePt * 2)}"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:line="${lineSpacingTwips(profile)}" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults></w:styles>`;
   const headerXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="${escapeXml(profile.fontFamily)}" w:hAnsi="${escapeXml(profile.fontFamily)}"/><w:sz w:val="${Math.round(profile.fontSizePt * 2)}"/></w:rPr><w:t>${escapeXml(header)}</w:t></w:r>${pageField}</w:p></w:hdr>`;
-  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${document.blocks.map((block) => renderWordParagraph(block, profile)).join('')}<w:sectPr><w:headerReference w:type="default" r:id="rId1"/><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`;
+  const page = pageDimensions(profile.pageSize);
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${document.blocks.map((block) => renderWordParagraph(block, profile)).join('')}<w:sectPr><w:headerReference w:type="default" r:id="rId1"/><w:pgSz w:w="${Math.round(page.widthPt * 20)}" w:h="${Math.round(page.heightPt * 20)}"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`;
   const files = new Map<string, Uint8Array>();
   files.set('[Content_Types].xml', encoder.encode(contentTypes));
   files.set('_rels/.rels', encoder.encode(relationships));
@@ -152,10 +155,12 @@ function renderPdf(document: StructuredDocument, options: ExportOptions): Uint8A
     chunks.push(rest);
     return chunks;
   })];
+  const dimensions = pageDimensions(profile.pageSize);
   const fontName = profile.fontFamily === 'Arial' ? 'Helvetica' : profile.fontFamily === 'Courier New' ? 'Courier' : 'Times-Roman';
   const fontSize = profile.fontSizePt;
   const lineHeight = Math.round(fontSize * (profile.lineSpacing === 'single' ? 1 : profile.lineSpacing === '1.15' ? 1.15 : profile.lineSpacing === '1.5' ? 1.5 : 2));
-  const linesPerPage = Math.max(1, Math.floor(680 / lineHeight));
+  const pageHeight = dimensions.heightPt;
+  const linesPerPage = Math.max(1, Math.floor((pageHeight - 112) / lineHeight));
   const pages: string[][] = [];
   for (let index = 0; index < lines.length; index += linesPerPage) pages.push(lines.slice(index, index + linesPerPage));
   if (!pages.length) pages.push([]);
@@ -169,7 +174,7 @@ function renderPdf(document: StructuredDocument, options: ExportOptions): Uint8A
     const contentId = pageId + 1;
     pageIds.push(pageId);
     const commands = ['BT', `/F1 ${fontSize} Tf`, '72 760 Td', ...page.map((line, lineIndex) => `${lineIndex ? `0 -${lineHeight} Td ` : ''}(${pdfEscape(line)}) Tj`), options.pageNumbering === false ? '' : `0 -${lineHeight} Td (${pageIndex + 1}) Tj`, 'ET'].filter(Boolean).join('\n');
-    objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentId} 0 R >>`);
+    objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${dimensions.widthPt} ${dimensions.heightPt}] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentId} 0 R >>`);
     objects.push(`<< /Length ${commands.length} >>\nstream\n${commands}\nendstream`);
   });
   objects[1] = `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(' ')}] /Count ${pageIds.length} >>`;

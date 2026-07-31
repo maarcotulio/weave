@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AutosaveController, type AutosaveStatus } from '../domain/autosave';
 import { blockText, documentFromText, replaceBlockText, toggleMarks } from '../domain/document';
-import { DEFAULT_EDITOR_STYLE, FONT_FAMILY_OPTIONS, FONT_SIZE_OPTIONS, LINE_SPACING_OPTIONS, type Chapter, type ContinuousDraft, type EditorStyleProfile, type ExportFormat, type ProjectSnapshot, type Scene, type SemanticMark, type StructuredDocument, type WritingStats } from '../domain/types';
+import { DEFAULT_EDITOR_STYLE, FONT_FAMILY_OPTIONS, FONT_SIZE_OPTIONS, LINE_SPACING_OPTIONS, PAGE_SIZE_OPTIONS, type Chapter, type ContinuousDraft, type EditorStyleProfile, type ExportFormat, type ProjectSnapshot, type Scene, type SemanticMark, type StructuredDocument, type WritingStats } from '../domain/types';
+import { pageDimensions, paginateDocument } from '../domain/pagination';
 import { InMemoryProjectRepository, type DocumentHead, type ProjectRepository } from '../domain/repository';
 import { exportCapturedRevision } from '../export/editorial';
 import { TauriProjectRepository } from '../infrastructure/tauri-repository';
@@ -21,7 +22,19 @@ function StyleControls({ profile, onChange, disabled }: { profile: EditorStylePr
     <label>Font<select aria-label="Font family" value={profile.fontFamily} disabled={disabled} onChange={(event) => onChange({ ...profile, fontFamily: event.target.value })}>{FONT_FAMILY_OPTIONS.map((font) => <option key={font} value={font}>{font}</option>)}</select></label>
     <label>Size<select aria-label="Font size" value={profile.fontSizePt} disabled={disabled} onChange={(event) => onChange({ ...profile, fontSizePt: Number(event.target.value) })}>{FONT_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size} pt</option>)}</select></label>
     <label>Spacing<select aria-label="Line spacing" value={profile.lineSpacing} disabled={disabled} onChange={(event) => onChange({ ...profile, lineSpacing: event.target.value as EditorStyleProfile['lineSpacing'] })}>{LINE_SPACING_OPTIONS.map((spacing) => <option key={spacing} value={spacing}>{spacing === '1.15' ? '1.15' : spacing === '1.5' ? '1.5' : spacing[0].toUpperCase() + spacing.slice(1)}</option>)}</select></label>
+    <label>Page<select aria-label="Page size" value={profile.pageSize ?? 'letter'} disabled={disabled} onChange={(event) => onChange({ ...profile, pageSize: event.target.value as NonNullable<EditorStyleProfile['pageSize']> })}>{PAGE_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size === 'a4' ? 'A4' : size === 'legal' ? 'US Legal' : 'US Letter'}</option>)}</select></label>
   </div>;
+}
+
+function AutoSizeTextArea({ value, onChange, readOnly, className, ariaLabel }: { value: string; onChange: (value: string) => void; readOnly: boolean; className: string; ariaLabel?: string }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    element.style.height = 'auto';
+    element.style.height = `${element.scrollHeight}px`;
+  }, [value]);
+  return <textarea ref={ref} className={className} aria-label={ariaLabel} value={value} readOnly={readOnly} rows={1} onChange={(event) => onChange(event.target.value)} />;
 }
 
 function GoalPanel({ stats, onSaveTarget }: { stats: WritingStats; onSaveTarget: (target: number) => void }) {
@@ -54,20 +67,41 @@ function Editor({ document, styleProfile, onChange, readOnly = false }: { docume
           </select>
           {(['bold', 'italic', 'underline'] as SemanticMark[]).map((mark) => <button type="button" key={mark} className="format-button" disabled={readOnly} onClick={() => updateBlock(index, toggleMarks(block, [mark]))} aria-label={`Toggle ${mark}`}><strong className={mark === 'italic' ? 'italic' : mark === 'underline' ? 'underline' : ''}>{mark[0].toUpperCase()}</strong></button>)}
         </div>
-        <textarea className={block.kind === 'heading' ? 'manuscript-input heading-input' : 'manuscript-input'} value={blockText(block)} readOnly={readOnly} rows={Math.max(1, Math.min(8, blockText(block).split('\n').length))} onChange={(event) => updateBlock(index, replaceBlockText(block, event.target.value))} />
+        <AutoSizeTextArea className={block.kind === 'heading' ? 'manuscript-input heading-input' : 'manuscript-input'} value={blockText(block)} readOnly={readOnly} onChange={(value) => updateBlock(index, replaceBlockText(block, value))} ariaLabel={`Block ${index + 1}`} />
         <div className="format-hint">{block.runs.some((run) => run.marks.length > 0) ? block.runs.flatMap((run) => run.marks).join(' · ') : 'semantic paragraph'}</div>
       </div>)}
     {document.blocks.length === 0 && <p className="empty-editor">Start writing…</p>}
   </div>;
 }
 
+interface ModalProps { eyebrow?: string; title: string; onClose?: () => void; children: React.ReactNode; footer?: React.ReactNode; }
+
+function Modal({ eyebrow, title, onClose, children, footer }: ModalProps) {
+  return <div className="modal-backdrop"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div className="modal-heading">{eyebrow && <p className="eyebrow">{eyebrow}</p>}<h2 id="modal-title">{title}</h2>{onClose && <button type="button" className="modal-close" aria-label="Close dialog" onClick={onClose}>×</button>}</div>
+    <div className="modal-content">{children}</div>
+    {footer && <div className="modal-actions">{footer}</div>}
+  </div></div>;
+}
+
+interface FormDialogConfig { eyebrow: string; title: string; fields: Array<{ key: string; label: string; value: string; placeholder?: string; type?: 'text' | 'number' }>; onSubmit: (values: Record<string, string>) => Promise<void>; }
+
+function FormDialog({ config, busy, onCancel, onSubmit }: { config: FormDialogConfig; busy: boolean; onCancel: () => void; onSubmit: (values: Record<string, string>) => void }) {
+  const [values, setValues] = useState(() => Object.fromEntries(config.fields.map((field) => [field.key, field.value])));
+  return <Modal eyebrow={config.eyebrow} title={config.title} onClose={onCancel}>
+    <form onSubmit={(event) => { event.preventDefault(); onSubmit(values); }}>
+      {config.fields.map((field) => <label className="modal-field" key={field.key}>{field.label}<input autoFocus={field.key === config.fields[0]?.key} type={field.type ?? 'text'} value={values[field.key] ?? ''} placeholder={field.placeholder} required onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))} /></label>)}
+      <div className="modal-actions"><button type="button" className="text-button" onClick={onCancel}>Cancel</button><button type="submit" className="primary-button" disabled={busy}>Continue</button></div>
+    </form>
+  </Modal>;
+}
+
 function ChoiceDialog({ onSplit, onKeep, onCancel, busy }: { onSplit: () => void; onKeep: () => void; onCancel: () => void; busy: boolean }) {
-  return <div className="modal-backdrop"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="return-title">
-    <p className="eyebrow">RETURN TO SCENES</p><h2 id="return-title">What should happen to this continuous draft?</h2>
+  return <Modal eyebrow="RETURN TO SCENES" title="What should happen to this continuous draft?" onClose={onCancel}>
     <p>Weave never guesses scene boundaries. Choose an explicit-marker split or keep this revision separate and recoverable.</p>
     <div className="choice-grid"><button type="button" onClick={onSplit} disabled={busy}><strong>Split automatically</strong><span>Use only paragraphs containing <code>***</code> or <code>Nova cena</code>. The old scene set stays preserved.</span></button><button type="button" onClick={onKeep} disabled={busy}><strong>Keep separate</strong><span>Leave the continuous draft and every scene document intact.</span></button></div>
     <button type="button" className="text-button" onClick={onCancel}>Cancel</button>
-  </div></div>;
+  </Modal>;
 }
 
 export default function App() {
@@ -83,6 +117,8 @@ export default function App() {
   const [editorDocument, setEditorDocument] = useState<StructuredDocument>(initialDocument());
   const [styleProfile, setStyleProfile] = useState<EditorStyleProfile>({ ...DEFAULT_EDITOR_STYLE });
   const [showReturnChoices, setShowReturnChoices] = useState(false);
+  const [formDialog, setFormDialog] = useState<FormDialogConfig>();
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState('');
   const [autosaveStatus, setAutosaveStatus] = useState<AutosaveStatus>({ state: 'saved', message: 'All changes saved' });
@@ -134,6 +170,7 @@ export default function App() {
   }, [autosave]);
 
   const run = async (operation: () => Promise<void>) => { setBusy(true); setLocalError(''); try { await operation(); } catch (error) { setLocalError(error instanceof Error ? error.message : String(error)); } finally { setBusy(false); } };
+  const submitFormDialog = (values: Record<string, string>) => void run(async () => { const config = formDialog; if (!config) return; await config.onSubmit(values); setFormDialog(undefined); });
 
   const saveCurrentDocument = useCallback(async () => {
     const head = documentHeadRef.current;
@@ -147,17 +184,28 @@ export default function App() {
     setSnapshot((current) => current ? { ...current, writingStats, status: result.status } : current);
   }, [mode, repository]);
   latestSaveRef.current = saveCurrentDocument;
+  const pages = useMemo(() => paginateDocument(editorDocument, styleProfile), [editorDocument, styleProfile]);
+  const updatePage = (page: StructuredDocument) => {
+    const changed = new Map(page.blocks.map((block) => [block.id, block]));
+    const next = editorDocumentRef.current.blocks.map((block) => changed.get(block.id) ?? block);
+    const value = { ...editorDocumentRef.current, blocks: next };
+    editorDocumentRef.current = value;
+    setEditorDocument(value);
+    if (mode !== 'compose') autosave.markDirty();
+  };
+  const pageStyle = { '--page-width': `${pageDimensions(styleProfile.pageSize).widthPx}px`, '--page-height': `${pageDimensions(styleProfile.pageSize).heightPx}px` } as React.CSSProperties;
 
   const createProject = () => void run(async () => {
     await autosave.flush();
-    const directory = window.prompt('Project directory', `${isDesktop ? '' : '/tmp/'}my-weave-project`); if (!directory) return;
-    const name = window.prompt('Project name', 'My story') || 'My story';
-    await repository.createProject(directory, name); const story = await repository.createStory('Story 1'); const chapter = await repository.createChapter(story.id, 'Chapter 1'); await repository.createScene(chapter.id, 'Scene 1'); await repository.createScene(chapter.id, 'Scene 2'); await refresh(false);
+    setFormDialog({ eyebrow: 'NEW PROJECT', title: 'Create a project', fields: [
+      { key: 'directory', label: 'Project directory', value: `${isDesktop ? '' : '/tmp/'}my-weave-project` },
+      { key: 'name', label: 'Project name', value: 'My story' }
+    ], onSubmit: async (values) => { const directory = values.directory.trim(); const name = values.name.trim() || 'My story'; await repository.createProject(directory, name); const story = await repository.createStory('Story 1'); const chapter = await repository.createChapter(story.id, 'Chapter 1'); await repository.createScene(chapter.id, 'Scene 1'); await repository.createScene(chapter.id, 'Scene 2'); await refresh(false); } });
   });
-  const openProject = () => void run(async () => { await autosave.flush(); const directory = window.prompt('Open .weave project directory'); if (!directory) return; await repository.openProject(directory); await refresh(false); });
+  const openProject = () => void run(async () => { await autosave.flush(); setFormDialog({ eyebrow: 'OPEN PROJECT', title: 'Open a project', fields: [{ key: 'directory', label: 'Project directory', value: '', placeholder: '/path/to/project' }], onSubmit: async (values) => { await repository.openProject(values.directory.trim()); await refresh(false); } }); });
   const addScene = () => void run(async () => { if (!selectedChapterId) return; const scene = await repository.createScene(selectedChapterId, `Scene ${scenes.length + 1}`); await refresh(); setSelectedSceneId(scene.id); });
   const addChapter = () => void run(async () => { if (!selectedStoryId) return; const chapterNumber = (snapshot?.chapters.filter((item) => item.storyId === selectedStoryId).length ?? 0) + 1; await repository.createChapter(selectedStoryId, `Chapter ${chapterNumber}`); await refresh(false); });
-  const renameScene = (scene: Scene) => void run(async () => { const title = window.prompt('Scene title', scene.title); if (title?.trim()) { await repository.renameScene(scene.id, title.trim()); await refresh(); } });
+  const renameScene = (scene: Scene) => void run(async () => { await autosave.flush(); setFormDialog({ eyebrow: 'SCENE', title: 'Rename scene', fields: [{ key: 'title', label: 'Scene title', value: scene.title }], onSubmit: async (values) => { const title = values.title.trim(); if (title) { await repository.renameScene(scene.id, title); await refresh(); } } }); });
   const moveScene = (scene: Scene, delta: number) => void run(async () => { await repository.reorderScene(scene.id, scene.position + delta); await refresh(); });
 
   const selectScene = (scene: Scene) => void run(async () => { await autosave.flush(); setMode('scene'); setDraft(undefined); setSelectedSceneId(scene.id); });
@@ -184,21 +232,23 @@ export default function App() {
   const backup = () => void run(async () => { await autosave.flush(); await repository.createBackup(); await refresh(); });
   const updateStyle = (profile: EditorStyleProfile) => void run(async () => { const saved = await repository.updateStyleProfile(profile); setStyleProfile(saved); setSnapshot((current) => current ? { ...current, styleProfile: saved } : current); });
   const updateGoal = (target: number) => void run(async () => { await repository.setDailyWordTarget(target); const writingStats = await repository.getWritingStats(); setSnapshot((current) => current ? { ...current, writingStats } : current); });
+  const newStory = () => void run(async () => { await autosave.flush(); setFormDialog({ eyebrow: 'MANUSCRIPT', title: 'New story', fields: [{ key: 'title', label: 'Story title', value: 'New story' }], onSubmit: async (values) => { const title = values.title.trim(); if (title) { await repository.createStory(title); await refresh(false); } } }); });
   const retryAutosave = () => void run(async () => { await autosave.retry(); });
 
-  if (!snapshot) return <main className="welcome"><div className="welcome-card"><div className="mark">W</div><p className="eyebrow">OFFLINE DESKTOP WRITING</p><h1>Make room for the story.</h1><p className="welcome-copy">Weave keeps your manuscript, revisions, SQLite database, and recovery files in a visible <code>.weave</code> project directory. No server. No network. No guesswork.</p><div className="welcome-actions"><button type="button" className="primary-button" onClick={createProject} disabled={busy}>Create project</button><button type="button" className="secondary-button" onClick={openProject} disabled={busy}>Open project</button></div>{localError && <p className="error-message">{localError}</p>}<p className="offline-note"><span className="status-dot" /> local-only · SQLite · revisioned</p></div></main>;
+  if (!snapshot) return <><main className="welcome"><div className="welcome-card"><div className="mark">W</div><p className="eyebrow">OFFLINE DESKTOP WRITING</p><h1>Make room for the story.</h1><p className="welcome-copy">Weave keeps your manuscript, revisions, SQLite database, and recovery files in a visible <code>.weave</code> project directory. No server. No network. No guesswork.</p><div className="welcome-actions"><button type="button" className="primary-button" onClick={createProject} disabled={busy}>Create project</button><button type="button" className="secondary-button" onClick={openProject} disabled={busy}>Open project</button></div>{localError && <p className="error-message">{localError}</p>}<p className="offline-note"><span className="status-dot" /> local-only · SQLite · revisioned</p></div></main>{formDialog && <FormDialog config={formDialog} busy={busy} onCancel={() => setFormDialog(undefined)} onSubmit={submitFormDialog} />}</>;
 
   const activeChapter: Chapter | undefined = snapshot.chapters.find((chapter) => chapter.id === selectedChapterId);
   const activeScene = scenes.find((scene) => scene.id === selectedSceneId);
-  return <div className="app-shell">
-    <header className="topbar"><div className="brand"><span className="brand-mark">W</span><span>Weave</span><span className="offline-pill">OFFLINE</span></div><div className="top-actions"><button type="button" onClick={checkIntegrity}>Integrity</button><button type="button" onClick={backup}>Backup</button><button type="button" onClick={doExport} disabled={busy || mode === 'compose'}>Export all</button><StatusBar status={autosaveStatus} />{autosaveStatus.state === 'error' && <button type="button" className="retry-button" onClick={retryAutosave}>Retry</button>}</div></header>
-    <aside className="sidebar"><div className="sidebar-heading"><span>MANUSCRIPT</span><button type="button" onClick={createProject} aria-label="New project">+</button></div>{snapshot.stories.map((story) => <div key={story.id} className="tree-group"><button type="button" className={`tree-item story ${selectedStoryId === story.id ? 'selected' : ''}`} onClick={() => void run(async () => { await autosave.flush(); setSelectedStoryId(story.id); })}>▾ <span>{story.title}</span></button>{snapshot.chapters.filter((chapter) => chapter.storyId === story.id).map((chapter) => <div key={chapter.id} className="chapter-group"><button type="button" className={`tree-item chapter ${selectedChapterId === chapter.id ? 'selected' : ''}`} onClick={() => void run(async () => { await autosave.flush(); setSelectedChapterId(chapter.id); setSelectedSceneId(undefined); })}>▾ <span>{chapter.title}</span></button>{selectedChapterId === chapter.id && scenes.map((scene) => <button type="button" key={scene.id} className={`tree-item scene ${selectedSceneId === scene.id && mode === 'scene' ? 'selected' : ''}`} onClick={() => selectScene(scene)}><span className="scene-index">{String(scene.position + 1).padStart(2, '0')}</span>{scene.title}</button>)}{selectedChapterId === chapter.id && <button type="button" className="add-scene" onClick={addScene}>+ New scene</button>}</div>)}</div>)}<button type="button" className="add-story" onClick={() => void run(async () => { const title = window.prompt('Story title', 'New story'); if (title) { await repository.createStory(title); await refresh(false); } })}>+ New story</button><div className="sidebar-bottom"><button type="button" onClick={addChapter} disabled={!selectedStoryId}>+ Chapter</button><button type="button" onClick={openProject}>Open</button></div></aside>
+  return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+    <header className="topbar"><button type="button" className="sidebar-toggle" aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-expanded={!sidebarCollapsed} onClick={() => setSidebarCollapsed((current) => !current)}>☰</button><div className="brand"><span className="brand-mark">W</span><span>Weave</span><span className="offline-pill">OFFLINE</span></div><div className="top-actions"><button type="button" onClick={checkIntegrity}>Integrity</button><button type="button" onClick={backup}>Backup</button><button type="button" onClick={doExport} disabled={busy || mode === 'compose'}>Export all</button><StatusBar status={autosaveStatus} />{autosaveStatus.state === 'error' && <button type="button" className="retry-button" onClick={retryAutosave}>Retry</button>}</div></header>
+    <aside className="sidebar"><div className="sidebar-heading"><span>MANUSCRIPT</span><div className="sidebar-heading-actions"><button type="button" onClick={createProject} aria-label="New project">+</button><button type="button" onClick={() => setSidebarCollapsed(true)} aria-label="Collapse sidebar">‹</button></div></div>{snapshot.stories.map((story) => <div key={story.id} className="tree-group"><button type="button" className={`tree-item story ${selectedStoryId === story.id ? 'selected' : ''}`} onClick={() => void run(async () => { await autosave.flush(); setSelectedStoryId(story.id); })}>▾ <span>{story.title}</span></button>{snapshot.chapters.filter((chapter) => chapter.storyId === story.id).map((chapter) => <div key={chapter.id} className="chapter-group"><button type="button" className={`tree-item chapter ${selectedChapterId === chapter.id ? 'selected' : ''}`} onClick={() => void run(async () => { await autosave.flush(); setSelectedChapterId(chapter.id); setSelectedSceneId(undefined); })}>▾ <span>{chapter.title}</span></button>{selectedChapterId === chapter.id && scenes.map((scene) => <button type="button" key={scene.id} className={`tree-item scene ${selectedSceneId === scene.id && mode === 'scene' ? 'selected' : ''}`} onClick={() => selectScene(scene)}><span className="scene-index">{String(scene.position + 1).padStart(2, '0')}</span>{scene.title}</button>)}{selectedChapterId === chapter.id && <button type="button" className="add-scene" onClick={addScene}>+ New scene</button>}</div>)}</div>)}<button type="button" className="add-story" onClick={newStory}>+ New story</button><div className="sidebar-bottom"><button type="button" onClick={addChapter} disabled={!selectedStoryId}>+ Chapter</button><button type="button" onClick={openProject}>Open</button></div></aside>
     <main className="workspace"><div className="workspace-head"><div><p className="eyebrow">{activeChapter?.title ?? 'Chapter'}</p><h1>{mode === 'continuous' ? 'Continuous draft' : mode === 'compose' ? 'Composed chapter' : activeScene?.title ?? 'Choose a scene'}</h1></div><div className="mode-switch"><button type="button" className={mode === 'scene' ? 'active' : ''} onClick={() => activeScene && selectScene(activeScene)}>Scenes</button><button type="button" className={mode === 'compose' ? 'active' : ''} onClick={compose}>Chapter view</button><button type="button" className={mode === 'continuous' ? 'active' : ''} onClick={openContinuous}>Continuous draft</button></div></div>
       {localError && <div className="inline-error" role="alert">{localError}</div>}
       <GoalPanel stats={snapshot.writingStats} onSaveTarget={updateGoal} />
-      <section className="paper-wrap"><div className="paper-meta"><span>{mode === 'compose' ? 'NON-DESTRUCTIVE COMPOSITION' : mode === 'continuous' ? 'SEPARATE REVISION · SOURCE SNAPSHOT PRESERVED' : 'SCENE DOCUMENT'}</span><span>{styleProfile.fontSizePt} pt · {styleProfile.fontFamily} · {styleProfile.lineSpacing} spacing</span></div><StyleControls profile={styleProfile} onChange={updateStyle} disabled={mode === 'compose'} /><Editor document={editorDocument} styleProfile={styleProfile} onChange={(value) => { setEditorDocument(value); editorDocumentRef.current = value; if (mode !== 'compose') autosave.markDirty(); }} readOnly={mode === 'compose'} /><div className="paper-footer"><span>{mode === 'compose' ? 'Scene documents remain the source.' : 'Structured document · changes save automatically'}</span>{documentHead && <span>revision {documentHead.revision}</span>}</div></section>
+      <div className="page-stack" aria-label="Manuscript pages"><StyleControls profile={styleProfile} onChange={updateStyle} disabled={mode === 'compose'} />{pages.map((page, pageIndex) => <section className="paper-page" style={pageStyle} key={`${pageIndex}-${page.blocks[0]?.id ?? 'empty'}`}><div className="paper-meta"><span>{mode === 'compose' ? 'NON-DESTRUCTIVE COMPOSITION' : mode === 'continuous' ? 'SEPARATE REVISION · SOURCE SNAPSHOT PRESERVED' : 'SCENE DOCUMENT'}</span><span>{pageDimensions(styleProfile.pageSize).label} · Page {pageIndex + 1} of {pages.length}</span></div><Editor document={page} styleProfile={styleProfile} onChange={updatePage} readOnly={mode === 'compose'} /><div className="paper-footer"><span>{mode === 'compose' ? 'Scene documents remain the source.' : 'Structured document · changes save automatically'}</span>{documentHead && pageIndex === pages.length - 1 && <span>revision {documentHead.revision}</span>}</div></section>)}</div>
       <footer className="editor-footer"><div>{mode === 'continuous' && <button type="button" className="secondary-button" onClick={returnToScenes}>Return to scenes</button>}{mode === 'scene' && activeScene && <><button type="button" className="secondary-button" onClick={() => renameScene(activeScene)}>Rename</button><button type="button" className="icon-button" onClick={() => moveScene(activeScene, -1)} aria-label="Move scene up">↑</button><button type="button" className="icon-button" onClick={() => moveScene(activeScene, 1)} aria-label="Move scene down">↓</button></>}{mode === 'compose' && <span className="guard-note">Composition is a view, never a second source.</span>}</div><div className="save-actions">{mode !== 'compose' && <button type="button" className="secondary-button" onClick={save} disabled={busy || !documentHead}>Save now</button>}</div></footer>
     </main>
     {showReturnChoices && <ChoiceDialog onSplit={split} onKeep={keepSeparate} onCancel={() => setShowReturnChoices(false)} busy={busy} />}
+    {formDialog && <FormDialog config={formDialog} busy={busy} onCancel={() => setFormDialog(undefined)} onSubmit={submitFormDialog} />}
   </div>;
 }

@@ -6,23 +6,28 @@ export type SemanticMark = 'bold' | 'italic' | 'underline';
 export type BlockKind = 'paragraph' | 'heading' | 'scene-break';
 export type Alignment = 'left' | 'center' | 'right';
 export type LineSpacing = 'single' | '1.15' | '1.5' | 'double';
+export type PageSize = 'letter' | 'a4' | 'legal';
 
 export interface EditorStyleProfile {
   /** Presentation only; never embedded in StructuredDocument. */
   fontFamily: string;
   fontSizePt: number;
   lineSpacing: LineSpacing;
+  /** Physical page format for the writing canvas and visual exports. */
+  pageSize?: PageSize;
 }
 
 export const DEFAULT_EDITOR_STYLE: EditorStyleProfile = Object.freeze({
   fontFamily: 'Times New Roman',
   fontSizePt: 12,
-  lineSpacing: 'double'
+  lineSpacing: 'double',
+  pageSize: 'letter'
 });
 
 export const FONT_FAMILY_OPTIONS = ['Times New Roman', 'Georgia', 'Arial', 'Courier New'] as const;
 export const FONT_SIZE_OPTIONS = [10, 11, 12, 14, 16, 18, 24] as const;
 export const LINE_SPACING_OPTIONS: LineSpacing[] = ['single', '1.15', '1.5', 'double'];
+export const PAGE_SIZE_OPTIONS: PageSize[] = ['letter', 'a4', 'legal'];
 
 export interface TextRun {
   text: string;
