@@ -41,6 +41,10 @@ The first launch can create or open a project directory. The starter project con
 - `src/app/` — renderer only; it calls repository use cases and never reads SQL/files.
 - `src-tauri/` — SQLite-backed desktop command implementation and filesystem safeguards.
 
+## Future roadmap
+
+- Dark mode is planned as a future feature; the current writing palette remains intentionally light.
+
 ## Scope and assumptions
 
 This slice intentionally excludes worldbuilding, React Flow, collaboration, sync, plugins, and runtime Docker. The desktop file picker is represented by the smallest local path prompt in this slice; a native picker can replace that UI without changing the repository boundary. The editorial export writer is local-only and deterministic rather than a cloud or office conversion service.

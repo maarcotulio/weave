@@ -17,6 +17,8 @@ describe('writing page layout', () => {
     expect(css).toContain('grid-template-columns: 220px minmax(0, 1fr)');
     expect(css).not.toContain('.paper-wrap');
     expect(app).toContain('sidebar-toggle');
+    expect(app).toContain('brand-cluster');
+    expect(css).toContain('.brand-cluster');
     expect(app).toContain('function Modal');
     expect(app).toContain('paginateDocument');
     expect(app).toContain('data-page-block-id');
