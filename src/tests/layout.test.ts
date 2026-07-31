@@ -10,6 +10,8 @@ describe('writing page layout', () => {
     expect(css).toContain('height: var(--page-height)');
     expect(css).toContain('min-height: 0');
     expect(css).toContain('overflow: visible');
+    expect(css).toContain('display: flex; flex-direction: column');
+    expect(css).toContain('margin-top: auto');
     expect(css).not.toContain('height: auto; overflow: visible');
     expect(css).toContain('@media (max-width: 1100px)');
     expect(css).toContain('grid-template-columns: 220px minmax(0, 1fr)');

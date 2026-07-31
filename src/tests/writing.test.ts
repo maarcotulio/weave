@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AutosaveController } from '../domain/autosave';
 import { blockText, documentFromText } from '../domain/document';
 import { countDocumentWords, localCalendarDate } from '../domain/goals';
-import { mergePaginatedDocument, pageDimensions, paginateDocument, paginateDocumentWithSources } from '../domain/pagination';
+import { PAGE_LAYOUT, mergePaginatedDocument, pageDimensions, pageTextHeight, paginateDocument, paginateDocumentWithSources } from '../domain/pagination';
 import { InMemoryProjectRepository } from '../domain/repository';
 import { DEFAULT_EDITOR_STYLE, type StructuredDocument } from '../domain/types';
 import { SQLiteProjectRepository } from '../infrastructure/sqlite-repository';
@@ -66,6 +66,13 @@ describe('writing style and goals', () => {
     expect(pages.flatMap((page) => page.blocks).map((block) => block.id)).toEqual(document.blocks.map((block) => block.id));
     expect(pageDimensions('a4').label).toBe('A4');
     expect(pageDimensions('a4').heightPx).toBeGreaterThan(pageDimensions('letter').heightPx);
+  });
+
+  it('reserves the real fixed-page footer boundary before reflowing content', () => {
+    expect(PAGE_LAYOUT.footerHeightPx).toBe(25);
+    expect(PAGE_LAYOUT.metaHeightPx).toBe(25);
+    expect(pageTextHeight('letter')).toBe(906);
+    expect(pageTextHeight('a4')).toBeGreaterThan(pageTextHeight('letter'));
   });
 
   it('splits one oversized paragraph across pages and merges edited fragments without loss', () => {
