@@ -1,0 +1,9 @@
+*{box-sizing:border-box}
+body{margin:0;font-family:var(--font-body);color:var(--text-body);background:var(--surface-page)}
+h1,h2{font-family:var(--font-display);font-weight:400;margin:0}
+code{font-family:var(--font-mono);font-size:.86em;background:var(--code-bg);border-radius:var(--radius-sm);padding:2px 5px}
+a{color:var(--accent-dark)}
+a:hover{color:var(--accent)}
+button,textarea,select,input{font:inherit}
+button{cursor:pointer}
+button:disabled{cursor:not-allowed;opacity:.45}
