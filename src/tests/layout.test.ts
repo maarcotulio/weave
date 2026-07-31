@@ -8,6 +8,7 @@ describe('writing page layout', () => {
     const app = readFileSync(join(process.cwd(), 'src/app/App.tsx'), 'utf8');
     expect(css).toContain('.paper-page');
     expect(css).toContain('min-height: var(--page-height)');
+    expect(css).toContain('height: auto; overflow: visible');
     expect(css).toContain('@media (max-width: 1100px)');
     expect(css).toContain('grid-template-columns: 220px minmax(0, 1fr)');
     expect(css).not.toContain('.paper-wrap');

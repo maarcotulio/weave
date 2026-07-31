@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { AutosaveController, type AutosaveStatus } from '../domain/autosave';
 import { blockText, documentFromText, replaceBlockText, toggleMarks } from '../domain/document';
 import { DEFAULT_EDITOR_STYLE, FONT_FAMILY_OPTIONS, FONT_SIZE_OPTIONS, LINE_SPACING_OPTIONS, PAGE_SIZE_OPTIONS, type Chapter, type ContinuousDraft, type EditorStyleProfile, type ExportFormat, type ProjectSnapshot, type Scene, type SemanticMark, type StructuredDocument, type WritingStats } from '../domain/types';
-import { pageDimensions, paginateDocument } from '../domain/pagination';
+import { mergePaginatedDocument, pageDimensions, paginateDocumentWithSources, type PaginatedPage } from '../domain/pagination';
 import { InMemoryProjectRepository, type DocumentHead, type ProjectRepository } from '../domain/repository';
 import { exportCapturedRevision } from '../export/editorial';
 import { TauriProjectRepository } from '../infrastructure/tauri-repository';
@@ -184,11 +184,9 @@ export default function App() {
     setSnapshot((current) => current ? { ...current, writingStats, status: result.status } : current);
   }, [mode, repository]);
   latestSaveRef.current = saveCurrentDocument;
-  const pages = useMemo(() => paginateDocument(editorDocument, styleProfile), [editorDocument, styleProfile]);
-  const updatePage = (page: StructuredDocument) => {
-    const changed = new Map(page.blocks.map((block) => [block.id, block]));
-    const next = editorDocumentRef.current.blocks.map((block) => changed.get(block.id) ?? block);
-    const value = { ...editorDocumentRef.current, blocks: next };
+  const pages = useMemo<PaginatedPage[]>(() => paginateDocumentWithSources(editorDocument, styleProfile), [editorDocument, styleProfile]);
+  const updatePage = (pageIndex: number, page: StructuredDocument) => {
+    const value = mergePaginatedDocument(editorDocumentRef.current, pages, pageIndex, page);
     editorDocumentRef.current = value;
     setEditorDocument(value);
     if (mode !== 'compose') autosave.markDirty();
@@ -245,7 +243,7 @@ export default function App() {
     <main className="workspace"><div className="workspace-head"><div><p className="eyebrow">{activeChapter?.title ?? 'Chapter'}</p><h1>{mode === 'continuous' ? 'Continuous draft' : mode === 'compose' ? 'Composed chapter' : activeScene?.title ?? 'Choose a scene'}</h1></div><div className="mode-switch"><button type="button" className={mode === 'scene' ? 'active' : ''} onClick={() => activeScene && selectScene(activeScene)}>Scenes</button><button type="button" className={mode === 'compose' ? 'active' : ''} onClick={compose}>Chapter view</button><button type="button" className={mode === 'continuous' ? 'active' : ''} onClick={openContinuous}>Continuous draft</button></div></div>
       {localError && <div className="inline-error" role="alert">{localError}</div>}
       <GoalPanel stats={snapshot.writingStats} onSaveTarget={updateGoal} />
-      <div className="page-stack" aria-label="Manuscript pages"><StyleControls profile={styleProfile} onChange={updateStyle} disabled={mode === 'compose'} />{pages.map((page, pageIndex) => <section className="paper-page" style={pageStyle} key={`${pageIndex}-${page.blocks[0]?.id ?? 'empty'}`}><div className="paper-meta"><span>{mode === 'compose' ? 'NON-DESTRUCTIVE COMPOSITION' : mode === 'continuous' ? 'SEPARATE REVISION · SOURCE SNAPSHOT PRESERVED' : 'SCENE DOCUMENT'}</span><span>{pageDimensions(styleProfile.pageSize).label} · Page {pageIndex + 1} of {pages.length}</span></div><Editor document={page} styleProfile={styleProfile} onChange={updatePage} readOnly={mode === 'compose'} /><div className="paper-footer"><span>{mode === 'compose' ? 'Scene documents remain the source.' : 'Structured document · changes save automatically'}</span>{documentHead && pageIndex === pages.length - 1 && <span>revision {documentHead.revision}</span>}</div></section>)}</div>
+      <div className="page-stack" aria-label="Manuscript pages"><StyleControls profile={styleProfile} onChange={updateStyle} disabled={mode === 'compose'} />{pages.map((page, pageIndex) => <section className="paper-page" style={pageStyle} key={`${pageIndex}-${page.document.blocks[0]?.id ?? 'empty'}`}><div className="paper-meta"><span>{mode === 'compose' ? 'NON-DESTRUCTIVE COMPOSITION' : mode === 'continuous' ? 'SEPARATE REVISION · SOURCE SNAPSHOT PRESERVED' : 'SCENE DOCUMENT'}</span><span>{pageDimensions(styleProfile.pageSize).label} · Page {pageIndex + 1} of {pages.length}</span></div><Editor document={page.document} styleProfile={styleProfile} onChange={(value) => updatePage(pageIndex, value)} readOnly={mode === 'compose'} /><div className="paper-footer"><span>{mode === 'compose' ? 'Scene documents remain the source.' : 'Structured document · changes save automatically'}</span>{documentHead && pageIndex === pages.length - 1 && <span>revision {documentHead.revision}</span>}</div></section>)}</div>
       <footer className="editor-footer"><div>{mode === 'continuous' && <button type="button" className="secondary-button" onClick={returnToScenes}>Return to scenes</button>}{mode === 'scene' && activeScene && <><button type="button" className="secondary-button" onClick={() => renameScene(activeScene)}>Rename</button><button type="button" className="icon-button" onClick={() => moveScene(activeScene, -1)} aria-label="Move scene up">↑</button><button type="button" className="icon-button" onClick={() => moveScene(activeScene, 1)} aria-label="Move scene down">↓</button></>}{mode === 'compose' && <span className="guard-note">Composition is a view, never a second source.</span>}</div><div className="save-actions">{mode !== 'compose' && <button type="button" className="secondary-button" onClick={save} disabled={busy || !documentHead}>Save now</button>}</div></footer>
     </main>
     {showReturnChoices && <ChoiceDialog onSplit={split} onKeep={keepSeparate} onCancel={() => setShowReturnChoices(false)} busy={busy} />}

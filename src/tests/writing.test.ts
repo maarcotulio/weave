@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AutosaveController } from '../domain/autosave';
-import { documentFromText } from '../domain/document';
+import { blockText, documentFromText } from '../domain/document';
 import { countDocumentWords, localCalendarDate } from '../domain/goals';
-import { pageDimensions, paginateDocument } from '../domain/pagination';
+import { mergePaginatedDocument, pageDimensions, paginateDocument, paginateDocumentWithSources } from '../domain/pagination';
 import { InMemoryProjectRepository } from '../domain/repository';
 import { DEFAULT_EDITOR_STYLE, type StructuredDocument } from '../domain/types';
 import { SQLiteProjectRepository } from '../infrastructure/sqlite-repository';
@@ -66,6 +66,25 @@ describe('writing style and goals', () => {
     expect(pages.flatMap((page) => page.blocks).map((block) => block.id)).toEqual(document.blocks.map((block) => block.id));
     expect(pageDimensions('a4').label).toBe('A4');
     expect(pageDimensions('a4').heightPx).toBeGreaterThan(pageDimensions('letter').heightPx);
+  });
+
+  it('splits one oversized paragraph across pages and merges edited fragments without loss', () => {
+    const prose = Array.from({ length: 1800 }, (_, index) => `word${index}`).join(' ');
+    const document = documentFromText(prose);
+    const style = { ...DEFAULT_EDITOR_STYLE, pageSize: 'letter' as const };
+    const pages = paginateDocument(document, style);
+    const legalPages = paginateDocument(document, { ...style, pageSize: 'legal' });
+    expect(pages.length).toBeGreaterThan(1);
+    expect(legalPages.length).toBeLessThan(pages.length);
+    expect(pages.flatMap((page) => page.blocks).map(blockText).join('')).toBe(prose);
+    expect(new Set(pages.flatMap((page) => page.blocks.map((block) => block.id))).size).toBe(pages.flatMap((page) => page.blocks).length);
+
+    const sourced = paginateDocumentWithSources(document, style);
+    const firstPage = sourced[0].document;
+    const firstBlock = firstPage.blocks[0];
+    const edited = { ...firstPage, blocks: firstPage.blocks.map((block, index) => index === 0 ? { ...block, runs: [{ text: `edited ${blockText(block)}`, marks: [] }] } : block) };
+    const merged = mergePaginatedDocument(document, sourced, 0, edited);
+    expect(blockText(merged.blocks[0])).toBe(`edited ${blockText(firstBlock)}${prose.slice(blockText(firstBlock).length)}`);
   });
 
   it('uses the style profile in visual exports', () => {
