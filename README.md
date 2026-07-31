@@ -41,15 +41,12 @@ The first launch can create or open a project directory. The starter project con
 - `src/app/` — renderer only; it calls repository use cases and never reads SQL/files.
 - `src-tauri/` — SQLite-backed desktop command implementation and filesystem safeguards.
 
-## Worldbuilding and story graph
+## Worldbuilding
 
-- The left navigation has separate **Manuscript** and **Worldbuilding** workspaces. Manuscript behavior remains the revisioned writing slice; Worldbuilding contains its own local item, note, relationship, and canvas tools.
-- Worlds, places/cities, characters, and terms have typed local properties and aliases. Relationships use stable IDs, so renaming updates every projection without breaking links.
-- Users can create any number of persisted Markdown notes. Only exact `[[Target]]` and `[[Target|label]]` tokens are indexed—normal prose is never heuristically parsed. Targets resolve deterministically against exactly one title/alias (or are visibly unresolved and repairable); resolved note links and backlinks retain stable IDs across a rename.
-- Outgoing links and backlinks combine typed domain relationships, Markdown wiki links, and explicit document anchors. Deleting a referenced item is refused by default; the explicit **remove references** path removes relationships/canvas placements and leaves document or Markdown links visible for repair.
-- Search is entirely local and covers titles, aliases, typed properties/terms, relationship context, note titles, note Markdown, and explicit wiki-link text.
-- React Flow canvases are separately user-created and persisted per story; no canvas is created implicitly. `@xyflow/react` is pinned to **12.11.2** in `package.json`/`package-lock.json`; it is the only canvas dependency. Run `npm audit --omit=dev` when updating it (the production dependency audit was clean at this pin).
-- Canvas node positions and viewport are persisted separately from entities. Nodes project current domain labels; relationship edges reference validated relationship IDs. A keyboard-accessible outline lists every graph node and edge, while the graph supports focus, Delete placement removal, and Home-to-fit.
+- The left navigation has separate **Manuscript** and **Worldbuilding** workspaces. Switching workspaces preserves the selected Manuscript story, chapter, and scene.
+- Worldbuilding contains only persisted local Markdown notes and explicitly user-created note canvases. Notes use only exact `[[Note title]]` and `[[Note title|label]]` syntax; normal prose is never heuristically parsed. Targets resolve only to a unique local note title and unresolved links remain repairable.
+- Notes and canvases open in independently closable, accessible in-content tabs. Closing a tab never changes its underlying note or canvas. With no open tab, the workspace offers only **Create new note**, **Create new canva**, and **Close**; Close returns to Manuscript without changing content.
+- React Flow canvases are separately created per selected story and contain Markdown-note nodes only. Resolved wiki links become canvas edges when both notes are placed; no freehand, relationship, scene, or automatic node model exists. Node positions and viewport persist separately from note Markdown. The keyboard-accessible outline mirrors every node and resolved edge, and Home fits the graph.
 
 ## Future roadmap
 

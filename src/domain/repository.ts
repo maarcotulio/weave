@@ -27,17 +27,8 @@ import {
   type StructuredDocument,
   type EditorStyleProfile,
   EntityRevisionConflictError,
-  type WorldbuildingItem,
-  type WorldbuildingItemKind,
-  type WorldbuildingProperties,
-  type RelationshipType,
-  RELATIONSHIP_TYPES,
-  type DomainRelationship,
-  type DocumentAnchor,
-  type DocumentLink,
   type MarkdownNote,
   type NoteLink,
-  type Backlink,
   type StoryCanvas,
   type CanvasPosition,
   type CanvasViewport,
@@ -47,6 +38,18 @@ import {
   type WritingGoals,
   type WritingStats
 } from './types';
+
+/* Legacy records are retained only to safely read pre-v4 state. They are not exposed by the repository contract or snapshot and are discarded by persistent adapters. */
+type WorldbuildingItemKind = 'world' | 'place' | 'character' | 'term';
+type WorldbuildingProperties = Record<string, string | undefined>;
+type RelationshipType = 'contains' | 'located-in' | 'appears-in' | 'knows' | 'allied-with' | 'opposes' | 'mentions' | 'related-to';
+const RELATIONSHIP_TYPES: readonly RelationshipType[] = ['contains', 'located-in', 'appears-in', 'knows', 'allied-with', 'opposes', 'mentions', 'related-to'];
+interface WorldbuildingItem { id: string; projectId: string; kind: WorldbuildingItemKind; title: string; aliases: string[]; properties: WorldbuildingProperties; revision: number; createdAt: string; updatedAt: string; }
+interface DomainRelationship { id: string; sourceId: string; targetId: string; type: RelationshipType; createdAt: string; }
+interface DocumentAnchor { documentId: string; blockId: string; start: number; end: number; }
+interface DocumentLink { id: string; anchor: DocumentAnchor; targetId?: string; unresolvedLabel?: string; createdAt: string; }
+type Backlink = { kind: 'relationship'; id: string; sourceId: string; sourceTitle: string; type: RelationshipType } | { kind: 'document'; id: string; sourceId: string; sourceTitle: string; anchor: DocumentAnchor } | { kind: 'note'; id: string; sourceId: string; sourceTitle: string; noteId: string; start: number; end: number; label?: string };
+interface ResolvedEntity { id: string; title: string; kind: WorldbuildingItemKind | 'chapter' | 'scene' | 'note'; }
 
 export interface DocumentHead {
   documentId: string;
@@ -79,18 +82,6 @@ export interface ProjectRepository {
   listScenes(chapterId: string, sceneSetId?: string): Promise<Scene[]>;
   renameScene(sceneId: string, title: string): Promise<Scene>;
   reorderScene(sceneId: string, position: number): Promise<Scene[]>;
-  createWorldbuildingItem(input: { kind: WorldbuildingItemKind; title: string; aliases?: string[]; properties?: WorldbuildingProperties }): Promise<WorldbuildingItem>;
-  updateWorldbuildingItem(itemId: string, input: { title: string; aliases: string[]; properties: WorldbuildingProperties }, expectedRevision: number): Promise<WorldbuildingItem>;
-  deleteWorldbuildingItem(itemId: string, expectedRevision: number, mode?: 'reject' | 'remove-references'): Promise<void>;
-  listWorldbuildingItems(kind?: WorldbuildingItemKind): Promise<WorldbuildingItem[]>;
-  searchWorldbuilding(query: string): Promise<WorldbuildingItem[]>;
-  createRelationship(sourceId: string, targetId: string, type: RelationshipType): Promise<DomainRelationship>;
-  deleteRelationship(relationshipId: string): Promise<void>;
-  listRelationships(entityId?: string): Promise<DomainRelationship[]>;
-  listBacklinks(targetId: string): Promise<Backlink[]>;
-  createDocumentLink(anchor: DocumentAnchor, targetId?: string, unresolvedLabel?: string): Promise<DocumentLink>;
-  repairDocumentLink(linkId: string, targetId: string): Promise<DocumentLink>;
-  listDocumentLinks(documentId?: string): Promise<DocumentLink[]>;
   createMarkdownNote(title: string, markdown?: string): Promise<MarkdownNote>;
   updateMarkdownNote(noteId: string, input: { title: string; markdown: string }, expectedRevision: number): Promise<MarkdownNote>;
   deleteMarkdownNote(noteId: string, expectedRevision: number, mode?: 'reject' | 'remove-references'): Promise<void>;
@@ -103,7 +94,6 @@ export interface ProjectRepository {
   getCanvasProjection(canvasId: string): Promise<CanvasProjection>;
   addCanvasNode(canvasId: string, entityId: string, position: CanvasPosition, expectedRevision: number): Promise<CanvasNode>;
   removeCanvasNode(canvasId: string, nodeId: string, expectedRevision: number): Promise<void>;
-  connectCanvasNodes(canvasId: string, sourceNodeId: string, targetNodeId: string, relationshipId: string, expectedRevision: number): Promise<CanvasEdge>;
   saveCanvasLayout(canvasId: string, positions: Array<{ id: string; position: CanvasPosition }>, viewport: CanvasViewport, expectedRevision: number): Promise<StoryCanvas>;
   getDocument(documentId: string): Promise<DocumentHead>;
   getRevision(revisionId: string): Promise<Revision>;
@@ -130,8 +120,6 @@ interface DocumentRecord {
   headRevision: number;
   revisions: Revision[];
 }
-
-interface ResolvedEntity { id: string; title: string; kind: WorldbuildingItemKind | 'chapter' | 'scene' | 'note'; }
 
 interface ParsedWikiLink { targetText: string; label?: string; start: number; end: number; occurrence: number; }
 
@@ -161,6 +149,7 @@ interface RepositoryState {
   documents: DocumentRecord[];
   drafts: ContinuousDraft[];
   backups: BackupRecord[];
+  /** v3 compatibility only; no longer surfaced or persisted by v4 adapters. */
   worldbuildingItems: WorldbuildingItem[];
   relationships: DomainRelationship[];
   documentLinks: DocumentLink[];
@@ -337,7 +326,7 @@ export class InMemoryProjectRepository implements ProjectRepository {
       const removedRelationshipIds = new Set(relationships.map((relationship) => relationship.id));
       const removedNodeIds = new Set(canvasNodes.map((node) => node.id));
       this.state.relationships = this.state.relationships.filter((relationship) => !removedRelationshipIds.has(relationship.id));
-      this.state.canvasEdges = this.state.canvasEdges.filter((edge) => !removedRelationshipIds.has(edge.relationshipId) && !removedNodeIds.has(edge.sourceNodeId) && !removedNodeIds.has(edge.targetNodeId));
+      this.state.canvasEdges = this.state.canvasEdges.filter((edge) => !removedNodeIds.has(edge.sourceNodeId) && !removedNodeIds.has(edge.targetNodeId));
       this.state.canvasNodes = this.state.canvasNodes.filter((node) => !removedNodeIds.has(node.id));
       this.state.documentLinks = this.state.documentLinks.map((link) => link.targetId === itemId ? { ...link, targetId: undefined, unresolvedLabel: item.title } : link);
       this.state.noteLinks = this.state.noteLinks.map((link) => link.targetId === itemId ? { ...link, targetId: undefined } : link);
@@ -381,7 +370,7 @@ export class InMemoryProjectRepository implements ProjectRepository {
   async deleteRelationship(relationshipId: string): Promise<void> {
     this.requireRelationship(relationshipId);
     this.state.relationships = this.state.relationships.filter((relationship) => relationship.id !== relationshipId);
-    this.state.canvasEdges = this.state.canvasEdges.filter((edge) => edge.relationshipId !== relationshipId);
+    this.state.canvasEdges = this.state.canvasEdges.filter(() => true);
     this.touchProject();
     this.state.status = { state: 'saved', message: 'Relationship removed from links and canvases', at: now() };
   }
@@ -458,20 +447,13 @@ export class InMemoryProjectRepository implements ProjectRepository {
   async deleteMarkdownNote(noteId: string, expectedRevision: number, mode: 'reject' | 'remove-references' = 'reject'): Promise<void> {
     const note = this.requireMarkdownNote(noteId);
     if (note.revision !== expectedRevision) throw this.entityConflict(note.id, expectedRevision, note.revision);
-    const relationships = this.state.relationships.filter((relationship) => relationship.sourceId === noteId || relationship.targetId === noteId);
     const incomingLinks = this.state.noteLinks.filter((link) => link.noteId !== noteId && link.targetId === noteId);
-    const canvasNodes = this.state.canvasNodes.filter((node) => node.entityId === noteId);
-    if (mode === 'reject' && (relationships.length || incomingLinks.length || canvasNodes.length)) throw new Error(`Cannot delete ${note.title}: references remain. Choose remove-references to preserve unresolved Markdown links.`);
-    const relationIds = new Set(relationships.map((relationship) => relationship.id));
-    const nodeIds = new Set(canvasNodes.map((node) => node.id));
-    if (mode === 'remove-references') {
-      this.state.relationships = this.state.relationships.filter((relationship) => !relationIds.has(relationship.id));
-      this.state.noteLinks = this.state.noteLinks.filter((link) => link.noteId !== noteId).map((link) => link.targetId === noteId ? { ...link, targetId: undefined } : link);
-      this.state.canvasNodes = this.state.canvasNodes.filter((node) => !nodeIds.has(node.id));
-      this.state.canvasEdges = this.state.canvasEdges.filter((edge) => !relationIds.has(edge.relationshipId) && !nodeIds.has(edge.sourceNodeId) && !nodeIds.has(edge.targetNodeId));
-    } else {
-      this.state.noteLinks = this.state.noteLinks.filter((link) => link.noteId !== noteId);
-    }
+    const outgoingLinkIds = new Set(this.state.noteLinks.filter((link) => link.noteId === noteId).map((link) => link.id));
+    const nodeIds = new Set(this.state.canvasNodes.filter((node) => node.entityId === noteId).map((node) => node.id));
+    if (mode === 'reject' && (incomingLinks.length || nodeIds.size)) throw new Error(`Cannot delete ${note.title}: references remain. Choose remove-references to preserve unresolved Markdown links.`);
+    this.state.noteLinks = this.state.noteLinks.filter((link) => link.noteId !== noteId).map((link) => mode === 'remove-references' && link.targetId === noteId ? { ...link, targetId: undefined } : link);
+    this.state.canvasNodes = this.state.canvasNodes.filter((node) => !nodeIds.has(node.id));
+    this.state.canvasEdges = this.state.canvasEdges.filter((edge) => !outgoingLinkIds.has(edge.noteLinkId) && !nodeIds.has(edge.sourceNodeId) && !nodeIds.has(edge.targetNodeId));
     this.state.markdownNotes = this.state.markdownNotes.filter((candidate) => candidate.id !== noteId);
     this.touchProject();
     this.state.status = { state: 'saved', message: 'Markdown note deleted safely', at: now() };
@@ -484,7 +466,7 @@ export class InMemoryProjectRepository implements ProjectRepository {
   async searchMarkdownNotes(query: string): Promise<MarkdownNote[]> {
     const needle = query.trim().toLocaleLowerCase();
     if (!needle) return this.listMarkdownNotes();
-    const linkedNoteIds = new Set(this.state.noteLinks.filter((link) => link.targetText.toLocaleLowerCase().includes(needle) || link.label?.toLocaleLowerCase().includes(needle) || (link.targetId && this.entityTitle(link.targetId).toLocaleLowerCase().includes(needle))).map((link) => link.noteId));
+    const linkedNoteIds = new Set(this.state.noteLinks.filter((link) => link.targetText.toLocaleLowerCase().includes(needle) || link.label?.toLocaleLowerCase().includes(needle) || (link.targetId && this.requireMarkdownNote(link.targetId).title.toLocaleLowerCase().includes(needle))).map((link) => link.noteId));
     return deepClone(this.state.markdownNotes.filter((note) => note.title.toLocaleLowerCase().includes(needle) || note.markdown.toLocaleLowerCase().includes(needle) || linkedNoteIds.has(note.id)).sort((left, right) => left.title.localeCompare(right.title)));
   }
 
@@ -494,7 +476,7 @@ export class InMemoryProjectRepository implements ProjectRepository {
 
   async repairNoteLink(linkId: string, targetId: string): Promise<NoteLink> {
     const link = this.requireNoteLink(linkId);
-    this.requireEntity(targetId);
+    this.requireMarkdownNote(targetId);
     link.targetId = targetId;
     this.touchProject();
     this.state.status = { state: 'saved', message: 'Markdown link repaired by stable ID', at: now() };
@@ -518,23 +500,28 @@ export class InMemoryProjectRepository implements ProjectRepository {
   async getCanvasProjection(canvasId: string): Promise<CanvasProjection> {
     const canvas = this.requireCanvas(canvasId);
     const nodes = this.state.canvasNodes.filter((node) => node.canvasId === canvasId).map((node) => {
-      const entity = this.requireEntity(node.entityId);
-      return { ...deepClone(node), entityKind: entity.kind, label: entity.title };
+      const note = this.requireMarkdownNote(node.entityId);
+      return { ...deepClone(node), entityKind: 'note' as const, label: note.title };
     });
-    return { canvas: deepClone(canvas), nodes, edges: deepClone(this.state.canvasEdges.filter((edge) => edge.canvasId === canvasId)) };
+    const edges = this.state.noteLinks.flatMap((link) => {
+      if (!link.targetId) return [];
+      const source = nodes.find((node) => node.entityId === link.noteId);
+      const target = nodes.find((node) => node.entityId === link.targetId);
+      return source && target ? [{ id: `canvas-note-link-${canvasId}-${link.id}`, canvasId, sourceNodeId: source.id, targetNodeId: target.id, noteLinkId: link.id }] : [];
+    });
+    return { canvas: deepClone(canvas), nodes, edges };
   }
 
   async addCanvasNode(canvasId: string, entityId: string, position: CanvasPosition, expectedRevision: number): Promise<CanvasNode> {
     const canvas = this.requireCanvasRevision(canvasId, expectedRevision);
-    const entity = this.requireEntity(entityId);
-    if (entity.kind !== 'world' && !this.entityCanAppearOnStory(entityId, canvas.storyId)) throw new Error('Chapter and scene nodes must belong to this canvas story');
+    this.requireMarkdownNote(entityId);
     const existing = this.state.canvasNodes.find((node) => node.canvasId === canvasId && node.entityId === entityId);
     if (existing) return deepClone(existing);
     this.validatePosition(position);
     const node: CanvasNode = { id: newId('canvas-node'), canvasId, entityId, position: deepClone(position) };
     this.state.canvasNodes.push(node);
     this.bumpCanvas(canvas);
-    this.state.status = { state: 'saved', message: 'Canvas node added', at: now() };
+    this.state.status = { state: 'saved', message: 'Markdown note added to canvas', at: now() };
     return deepClone(node);
   }
 
@@ -546,21 +533,6 @@ export class InMemoryProjectRepository implements ProjectRepository {
     this.state.canvasEdges = this.state.canvasEdges.filter((edge) => edge.sourceNodeId !== nodeId && edge.targetNodeId !== nodeId);
     this.bumpCanvas(canvas);
     this.state.status = { state: 'saved', message: 'Canvas placement removed; domain data is unchanged', at: now() };
-  }
-
-  async connectCanvasNodes(canvasId: string, sourceNodeId: string, targetNodeId: string, relationshipId: string, expectedRevision: number): Promise<CanvasEdge> {
-    const canvas = this.requireCanvasRevision(canvasId, expectedRevision);
-    const source = this.requireCanvasNode(canvasId, sourceNodeId);
-    const target = this.requireCanvasNode(canvasId, targetNodeId);
-    const relationship = this.requireRelationship(relationshipId);
-    if (relationship.sourceId !== source.entityId || relationship.targetId !== target.entityId) throw new Error('Canvas edges must use a relationship whose stable source and target match the selected nodes');
-    const existing = this.state.canvasEdges.find((edge) => edge.canvasId === canvasId && edge.relationshipId === relationshipId && edge.sourceNodeId === sourceNodeId && edge.targetNodeId === targetNodeId);
-    if (existing) return deepClone(existing);
-    const edge: CanvasEdge = { id: newId('canvas-edge'), canvasId, sourceNodeId, targetNodeId, relationshipId };
-    this.state.canvasEdges.push(edge);
-    this.bumpCanvas(canvas);
-    this.state.status = { state: 'saved', message: 'Validated relationship added to canvas', at: now() };
-    return deepClone(edge);
   }
 
   async saveCanvasLayout(canvasId: string, positions: Array<{ id: string; position: CanvasPosition }>, viewport: CanvasViewport, expectedRevision: number): Promise<StoryCanvas> {
@@ -728,19 +700,19 @@ export class InMemoryProjectRepository implements ProjectRepository {
       }
       for (const link of this.state.noteLinks) {
         this.requireMarkdownNote(link.noteId);
-        if (link.targetId) this.requireEntity(link.targetId);
+        if (link.targetId) this.requireMarkdownNote(link.targetId);
         if (!link.targetText.trim() || link.start < 0 || link.end < link.start) throw new Error(`Markdown link ${link.id} is invalid`);
       }
       for (const canvas of this.state.canvases) {
         this.requireStory(canvas.storyId);
         if (canvas.revision < 1) throw new Error(`Canvas ${canvas.id} has an invalid revision`);
       }
-      for (const node of this.state.canvasNodes) { this.requireCanvas(node.canvasId); this.requireEntity(node.entityId); this.validatePosition(node.position); }
+      for (const node of this.state.canvasNodes) { this.requireCanvas(node.canvasId); this.requireMarkdownNote(node.entityId); this.validatePosition(node.position); }
       for (const edge of this.state.canvasEdges) {
         const source = this.requireCanvasNode(edge.canvasId, edge.sourceNodeId);
         const target = this.requireCanvasNode(edge.canvasId, edge.targetNodeId);
-        const relationship = this.requireRelationship(edge.relationshipId);
-        if (source.entityId !== relationship.sourceId || target.entityId !== relationship.targetId) throw new Error(`Canvas edge ${edge.id} does not match its relationship`);
+        const link = this.requireNoteLink(edge.noteLinkId);
+        if (source.entityId !== link.noteId || target.entityId !== link.targetId) throw new Error(`Canvas edge ${edge.id} does not match its Markdown link`);
       }
       const report = { ok: true, message: 'Integrity check passed', checkedAt: now() };
       this.state.status = { state: 'saved', message: report.message, at: report.checkedAt };
@@ -784,9 +756,6 @@ export class InMemoryProjectRepository implements ProjectRepository {
       sceneSets: deepClone(this.state.sceneSets),
       scenes: deepClone(this.state.scenes),
       continuousDrafts: deepClone(this.state.drafts),
-      worldbuildingItems: deepClone(this.state.worldbuildingItems),
-      relationships: deepClone(this.state.relationships),
-      documentLinks: deepClone(this.state.documentLinks),
       markdownNotes: deepClone(this.state.markdownNotes),
       noteLinks: deepClone(this.state.noteLinks),
       canvases: deepClone(this.state.canvases),
@@ -836,26 +805,23 @@ export class InMemoryProjectRepository implements ProjectRepository {
     return link;
   }
 
-  /** Resolves one exact wiki target against current titles/aliases, never prose. */
+  /** Resolves one exact wiki target against local note titles, never prose. */
   protected resolveWikiTarget(targetText: string): string | undefined {
     const normalized = targetText.trim().toLocaleLowerCase();
-    const candidates = [
-      ...this.state.worldbuildingItems.filter((item) => item.title.toLocaleLowerCase() === normalized || item.aliases.some((alias) => alias.toLocaleLowerCase() === normalized)).map((item) => item.id),
-      ...this.state.markdownNotes.filter((note) => note.title.toLocaleLowerCase() === normalized).map((note) => note.id)
-    ];
+    const candidates = this.state.markdownNotes.filter((note) => note.title.toLocaleLowerCase() === normalized).map((note) => note.id);
     return candidates.length === 1 ? candidates[0] : undefined;
   }
 
   protected rebuildNoteLinks(note: MarkdownNote, previous: NoteLink[]): NoteLink[] {
     return parseWikiLinks(note.markdown).map((parsed) => {
       const existing = previous.find((link) => link.targetText === parsed.targetText && link.label === parsed.label && link.occurrence === parsed.occurrence);
-      const targetId = existing?.targetId && this.entityExists(existing.targetId) ? existing.targetId : this.resolveWikiTarget(parsed.targetText);
+      const targetId = existing?.targetId && this.noteExists(existing.targetId) ? existing.targetId : this.resolveWikiTarget(parsed.targetText);
       return { id: existing?.id ?? newId('note-link'), noteId: note.id, targetId, targetText: parsed.targetText, label: parsed.label, start: parsed.start, end: parsed.end, occurrence: parsed.occurrence, createdAt: existing?.createdAt ?? now() };
     });
   }
 
-  protected entityExists(entityId: string): boolean {
-    try { this.requireEntity(entityId); return true; } catch { return false; }
+  protected noteExists(noteId: string): boolean {
+    try { this.requireMarkdownNote(noteId); return true; } catch { return false; }
   }
 
   protected requireWorldbuildingItem(itemId: string): WorldbuildingItem {

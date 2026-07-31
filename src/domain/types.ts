@@ -87,59 +87,6 @@ export interface Scene {
   documentId: string;
 }
 
-/** Typed, local-only worldbuilding records. Their IDs, rather than titles, are link targets. */
-export type WorldbuildingItemKind = 'world' | 'place' | 'character' | 'term';
-
-export interface WorldProperties { genre?: string; era?: string; summary?: string; }
-export interface PlaceProperties { placeType?: string; region?: string; description?: string; }
-export interface CharacterProperties { role?: string; pronouns?: string; summary?: string; }
-export interface TermProperties { category?: string; definition?: string; }
-export type WorldbuildingProperties = WorldProperties | PlaceProperties | CharacterProperties | TermProperties;
-
-export interface WorldbuildingItem {
-  id: string;
-  projectId: string;
-  kind: WorldbuildingItemKind;
-  title: string;
-  aliases: string[];
-  properties: WorldbuildingProperties;
-  /** Optimistic-concurrency revision for structured worldbuilding edits. */
-  revision: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export const RELATIONSHIP_TYPES = [
-  'contains', 'located-in', 'appears-in', 'knows', 'allied-with', 'opposes', 'mentions', 'related-to'
-] as const;
-export type RelationshipType = typeof RELATIONSHIP_TYPES[number];
-
-/** Source and target can be worldbuilding items, chapters, or scenes. */
-export interface DomainRelationship {
-  id: string;
-  sourceId: string;
-  targetId: string;
-  type: RelationshipType;
-  createdAt: string;
-}
-
-export interface DocumentAnchor {
-  documentId: string;
-  blockId: string;
-  start: number;
-  end: number;
-}
-
-/** Explicit editor-created links only; prose is never heuristically parsed. */
-export interface DocumentLink {
-  id: string;
-  anchor: DocumentAnchor;
-  targetId?: string;
-  /** Retained when a target is removed so it is visible and repairable. */
-  unresolvedLabel?: string;
-  createdAt: string;
-}
-
 /** A user-authored Markdown note; its link index is derived only from [[...]] tokens. */
 export interface MarkdownNote {
   id: string;
@@ -154,7 +101,7 @@ export interface MarkdownNote {
 export interface NoteLink {
   id: string;
   noteId: string;
-  /** Stable target ID after deterministic exact title/alias resolution or repair. */
+  /** Stable target note ID after deterministic exact title resolution or repair. */
   targetId?: string;
   targetText: string;
   label?: string;
@@ -164,11 +111,6 @@ export interface NoteLink {
   occurrence: number;
   createdAt: string;
 }
-
-export type Backlink =
-  | { kind: 'relationship'; id: string; sourceId: string; sourceTitle: string; type: RelationshipType }
-  | { kind: 'document'; id: string; sourceId: string; sourceTitle: string; anchor: DocumentAnchor }
-  | { kind: 'note'; id: string; sourceId: string; sourceTitle: string; noteId: string; start: number; end: number; label?: string };
 
 export interface CanvasViewport { x: number; y: number; zoom: number; }
 export interface CanvasPosition { x: number; y: number; }
@@ -182,7 +124,7 @@ export interface StoryCanvas {
   updatedAt: string;
 }
 
-/** A placement only: it never stores or mutates entity labels or content. */
+/** A placement only: it never stores or mutates note labels or content. */
 export interface CanvasNode {
   id: string;
   canvasId: string;
@@ -190,17 +132,17 @@ export interface CanvasNode {
   position: CanvasPosition;
 }
 
-/** Edges reference validated relationship records, never copied labels. */
+/** Edges are projections of resolved Markdown note links. */
 export interface CanvasEdge {
   id: string;
   canvasId: string;
   sourceNodeId: string;
   targetNodeId: string;
-  relationshipId: string;
+  noteLinkId: string;
 }
 
 export interface CanvasProjectionNode extends CanvasNode {
-  entityKind: WorldbuildingItemKind | 'chapter' | 'scene' | 'note';
+  entityKind: 'note';
   label: string;
 }
 
@@ -282,9 +224,6 @@ export interface ProjectSnapshot {
   sceneSets: SceneSet[];
   scenes: Scene[];
   continuousDrafts: ContinuousDraft[];
-  worldbuildingItems: WorldbuildingItem[];
-  relationships: DomainRelationship[];
-  documentLinks: DocumentLink[];
   markdownNotes: MarkdownNote[];
   noteLinks: NoteLink[];
   canvases: StoryCanvas[];

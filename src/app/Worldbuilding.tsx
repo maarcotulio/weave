@@ -1,263 +1,95 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Background,
-  Controls,
-  MiniMap,
-  ReactFlow,
-  applyNodeChanges,
-  type Connection,
-  type Edge,
-  type Node,
-  type NodeChange,
-  type ReactFlowInstance
-} from '@xyflow/react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Background, Controls, MiniMap, ReactFlow, applyNodeChanges, type Edge, type Node, type NodeChange, type ReactFlowInstance } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import type { ProjectRepository } from '../domain/repository';
-import {
-  RELATIONSHIP_TYPES,
-  type Backlink,
-  type CanvasProjection,
-  type CanvasViewport,
-  type DocumentAnchor,
-  type MarkdownNote,
-  type ProjectSnapshot,
-  type RelationshipType,
-  type StoryCanvas,
-  type WorldbuildingItem,
-  type WorldbuildingItemKind,
-  type WorldbuildingProperties
-} from '../domain/types';
+import type { CanvasProjection, CanvasViewport, MarkdownNote, ProjectSnapshot, StoryCanvas } from '../domain/types';
 
-const propertyFields: Record<WorldbuildingItemKind, Array<{ key: string; label: string; placeholder: string }>> = {
-  world: [{ key: 'genre', label: 'Genre', placeholder: 'Epic fantasy' }, { key: 'era', label: 'Era', placeholder: 'Third age' }, { key: 'summary', label: 'Summary', placeholder: 'A concise premise' }],
-  place: [{ key: 'placeType', label: 'Place type', placeholder: 'City, district, tavern…' }, { key: 'region', label: 'Region', placeholder: 'Northern coast' }, { key: 'description', label: 'Description', placeholder: 'What makes this place distinct?' }],
-  character: [{ key: 'role', label: 'Role', placeholder: 'Protagonist' }, { key: 'pronouns', label: 'Pronouns', placeholder: 'she/her' }, { key: 'summary', label: 'Summary', placeholder: 'A concise character note' }],
-  term: [{ key: 'category', label: 'Category', placeholder: 'Magic, faction, artifact…' }, { key: 'definition', label: 'Definition', placeholder: 'What does this mean?' }]
-};
+type OpenTab = { kind: 'note' | 'canvas'; id: string };
+const keyFor = (tab: OpenTab) => `${tab.kind}:${tab.id}`;
 
-interface EntityOption { id: string; label: string; kind: string; }
-
-function entityOptions(snapshot: ProjectSnapshot, storyId?: string): EntityOption[] {
-  const chapterIds = new Set(snapshot.chapters.filter((chapter) => !storyId || chapter.storyId === storyId).map((chapter) => chapter.id));
-  const setIds = new Set(snapshot.sceneSets.filter((set) => chapterIds.has(set.chapterId)).map((set) => set.id));
-  return [
-    ...snapshot.worldbuildingItems.map((item) => ({ id: item.id, label: item.title, kind: item.kind })),
-    ...snapshot.markdownNotes.map((note) => ({ id: note.id, label: note.title, kind: 'note' })),
-    ...snapshot.chapters.filter((chapter) => !storyId || chapter.storyId === storyId).map((chapter) => ({ id: chapter.id, label: chapter.title, kind: 'chapter' })),
-    ...snapshot.scenes.filter((scene) => !storyId || setIds.has(scene.sceneSetId)).map((scene) => ({ id: scene.id, label: scene.title, kind: 'scene' }))
-  ];
+function TabStrip({ tabs, activeKey, snapshot, onActivate, onClose }: { tabs: OpenTab[]; activeKey?: string; snapshot: ProjectSnapshot; onActivate: (key: string) => void; onClose: (key: string) => void }) {
+  const labelFor = (tab: OpenTab) => tab.kind === 'note' ? snapshot.markdownNotes.find((note) => note.id === tab.id)?.title ?? 'Deleted note' : snapshot.canvases.find((canvas) => canvas.id === tab.id)?.title ?? 'Deleted canvas';
+  return <div className="world-tab-strip" role="tablist" aria-label="Open Worldbuilding tabs">
+    {tabs.map((tab) => { const key = keyFor(tab); return <div className="world-tab" role="presentation" key={key}>
+      <button type="button" role="tab" id={`world-tab-${key}`} aria-selected={activeKey === key} aria-controls={`world-panel-${key}`} className={activeKey === key ? 'active' : ''} onClick={() => onActivate(key)}>{tab.kind === 'note' ? 'Note' : 'Canvas'} · {labelFor(tab)}</button>
+      <button type="button" className="world-tab-close" aria-label={`Close ${labelFor(tab)} tab`} onClick={() => onClose(key)}>×</button>
+    </div>; })}
+  </div>;
 }
 
-function titleFor(entities: EntityOption[], id: string): string { return entities.find((entity) => entity.id === id)?.label ?? 'Missing item'; }
-function newProperties(kind: WorldbuildingItemKind): Record<string, string> { return Object.fromEntries(propertyFields[kind].map((field) => [field.key, ''])); }
-
-function ItemForm({ item, onSave, onCancel }: { item?: WorldbuildingItem; onSave: (value: { kind: WorldbuildingItemKind; title: string; aliases: string[]; properties: WorldbuildingProperties; revision?: number }) => void; onCancel: () => void }) {
-  const [kind, setKind] = useState<WorldbuildingItemKind>(item?.kind ?? 'world');
-  const [title, setTitle] = useState(item?.title ?? '');
-  const [aliases, setAliases] = useState(item?.aliases.join(', ') ?? '');
-  const [properties, setProperties] = useState<Record<string, string>>(() => ({ ...newProperties(item?.kind ?? 'world'), ...(item?.properties ?? {}) }));
-  useEffect(() => {
-    setKind(item?.kind ?? 'world'); setTitle(item?.title ?? ''); setAliases(item?.aliases.join(', ') ?? '');
-    setProperties({ ...newProperties(item?.kind ?? 'world'), ...(item?.properties ?? {}) });
-  }, [item]);
-  return <form className="world-item-form" onSubmit={(event) => { event.preventDefault(); onSave({ kind, title, aliases: aliases.split(',').map((alias) => alias.trim()).filter(Boolean), properties, revision: item?.revision }); }}>
-    <label>Type<select value={kind} disabled={Boolean(item)} onChange={(event) => { const next = event.target.value as WorldbuildingItemKind; setKind(next); setProperties(newProperties(next)); }}>{(['world', 'place', 'character', 'term'] as WorldbuildingItemKind[]).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
-    <label>Title<input value={title} required onChange={(event) => setTitle(event.target.value)} /></label>
-    <label>Aliases <small>comma separated</small><input value={aliases} placeholder="Known names, nicknames" onChange={(event) => setAliases(event.target.value)} /></label>
-    {propertyFields[kind].map((field) => <label key={field.key}>{field.label}<input value={properties[field.key] ?? ''} placeholder={field.placeholder} onChange={(event) => setProperties((current) => ({ ...current, [field.key]: event.target.value }))} /></label>)}
-    <div className="world-form-actions"><button type="button" className="text-button" onClick={onCancel}>Cancel</button><button type="submit" className="primary-button">{item ? 'Save item' : 'Create item'}</button></div>
-  </form>;
-}
-
-function MarkdownNotes({ repository, snapshot, entities, onChanged, onError, requestedNoteId, requestedOffset }: { repository: ProjectRepository; snapshot: ProjectSnapshot; entities: EntityOption[]; onChanged: () => Promise<void>; onError: (message: string) => void; requestedNoteId?: string; requestedOffset?: number }) {
-  const [selectedNoteId, setSelectedNoteId] = useState<string>();
-  const [newNote, setNewNote] = useState(false);
-  const [title, setTitle] = useState('');
-  const [markdown, setMarkdown] = useState('');
-  const [noteSearch, setNoteSearch] = useState('');
-  const [noteResults, setNoteResults] = useState<MarkdownNote[]>(snapshot.markdownNotes);
-  const [linkTarget, setLinkTarget] = useState('');
-  const [repairTarget, setRepairTarget] = useState('');
+function NoteEditor({ repository, note, snapshot, onRefresh, onOpen, onClose, onError }: { repository: ProjectRepository; note: MarkdownNote; snapshot: ProjectSnapshot; onRefresh: () => Promise<void>; onOpen: (id: string) => void; onClose: () => void; onError: (message: string) => void }) {
+  const [title, setTitle] = useState(note.title);
+  const [markdown, setMarkdown] = useState(note.markdown);
+  const [linkTargetId, setLinkTargetId] = useState('');
+  const [repairTargetId, setRepairTargetId] = useState('');
   const editor = useRef<HTMLTextAreaElement>(null);
-  const panel = useRef<HTMLElement>(null);
-  const selected = snapshot.markdownNotes.find((note) => note.id === selectedNoteId);
-  const noteLinks = snapshot.noteLinks.filter((link) => link.noteId === selectedNoteId);
-  useEffect(() => { if (!newNote && (!selectedNoteId || !snapshot.markdownNotes.some((note) => note.id === selectedNoteId))) setSelectedNoteId(snapshot.markdownNotes[0]?.id); }, [newNote, selectedNoteId, snapshot.markdownNotes]);
-  useEffect(() => { if (!selected) return; setTitle(selected.title); setMarkdown(selected.markdown); }, [selected]);
-  useEffect(() => { if (!requestedNoteId) return; setNewNote(false); setSelectedNoteId(requestedNoteId); panel.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, [requestedNoteId]);
-  useEffect(() => { if (requestedOffset === undefined || !editor.current || selectedNoteId !== requestedNoteId) return; editor.current.focus(); editor.current.setSelectionRange(requestedOffset, requestedOffset); }, [requestedNoteId, requestedOffset, selectedNoteId, markdown]);
-  useEffect(() => { let active = true; void repository.searchMarkdownNotes(noteSearch).then((notes) => { if (active) setNoteResults(notes); }).catch((error) => onError(error instanceof Error ? error.message : String(error))); return () => { active = false; }; }, [noteSearch, onError, repository, snapshot.markdownNotes]);
-  const save = async () => {
-    try {
-      const note = selected ? await repository.updateMarkdownNote(selected.id, { title, markdown }, selected.revision) : await repository.createMarkdownNote(title, markdown);
-      setNewNote(false); setSelectedNoteId(note.id); await onChanged();
-    } catch (error) { onError(error instanceof Error ? error.message : String(error)); }
-  };
-  const insertWikiLink = () => {
-    const target = entities.find((entity) => entity.id === linkTarget); if (!target) return;
-    const field = editor.current; const start = field?.selectionStart ?? markdown.length; const end = field?.selectionEnd ?? start; const token = `[[${target.label}]]`;
-    setMarkdown(`${markdown.slice(0, start)}${token}${markdown.slice(end)}`); setLinkTarget('');
+  const links = snapshot.noteLinks.filter((link) => link.noteId === note.id);
+  const backlinks = snapshot.noteLinks.filter((link) => link.targetId === note.id);
+  useEffect(() => { setTitle(note.title); setMarkdown(note.markdown); }, [note.id, note.revision]);
+  const save = async () => { try { await repository.updateMarkdownNote(note.id, { title, markdown }, note.revision); await onRefresh(); } catch (error) { onError(error instanceof Error ? error.message : String(error)); } };
+  const insertLink = () => {
+    const target = snapshot.markdownNotes.find((candidate) => candidate.id === linkTargetId); if (!target) return;
+    const start = editor.current?.selectionStart ?? markdown.length; const end = editor.current?.selectionEnd ?? start; const token = `[[${target.title}]]`;
+    setMarkdown(`${markdown.slice(0, start)}${token}${markdown.slice(end)}`); setLinkTargetId('');
     requestAnimationFrame(() => { editor.current?.focus(); editor.current?.setSelectionRange(start + token.length, start + token.length); });
   };
-  const deleteSelectedNote = async () => {
-    if (!selected || !window.confirm(`Remove ${selected.title}?`)) return;
-    try { await repository.deleteMarkdownNote(selected.id, selected.revision); setNewNote(true); setSelectedNoteId(undefined); setTitle('Untitled note'); setMarkdown(''); await onChanged(); }
+  const deleteNote = async () => {
+    if (!window.confirm(`Remove ${note.title}?`)) return;
+    try { await repository.deleteMarkdownNote(note.id, note.revision); onClose(); await onRefresh(); }
     catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (message.startsWith('Cannot delete') && window.confirm('Remove relationships and canvas placements? Incoming Markdown links will remain unresolved for repair.')) {
-        try { await repository.deleteMarkdownNote(selected.id, selected.revision, 'remove-references'); setNewNote(true); setSelectedNoteId(undefined); setTitle('Untitled note'); setMarkdown(''); await onChanged(); } catch (retryError) { onError(retryError instanceof Error ? retryError.message : String(retryError)); }
+      if (message.startsWith('Cannot delete') && window.confirm('Remove this note from canvases and leave incoming Markdown links unresolved for repair?')) {
+        try { await repository.deleteMarkdownNote(note.id, note.revision, 'remove-references'); onClose(); await onRefresh(); } catch (retry) { onError(retry instanceof Error ? retry.message : String(retry)); }
       } else onError(message);
     }
   };
-  return <section ref={panel} className="markdown-notes" aria-labelledby="markdown-notes-title">
-    <div className="notes-head"><div><p className="eyebrow">MARKDOWN NOTES</p><h2 id="markdown-notes-title">Linked notes</h2><p>Only exact <code>[[Target]]</code> and <code>[[Target|label]]</code> tokens become links. Titles and aliases resolve locally and deterministically; prose is never guessed.</p></div><button type="button" className="primary-button" onClick={() => { setNewNote(true); setSelectedNoteId(undefined); setTitle('Untitled note'); setMarkdown(''); }}>+ New note</button></div>
-    <div className="notes-grid"><aside className="note-list" aria-label="Markdown notes"><label>Search notes<input value={noteSearch} placeholder="Search local Markdown" onChange={(event) => setNoteSearch(event.target.value)} /></label>{noteResults.map((note) => <button type="button" className={note.id === selectedNoteId ? 'selected' : ''} key={note.id} onClick={() => { setNewNote(false); setSelectedNoteId(note.id); }}>{note.title}</button>)}{noteResults.length === 0 && <p>No notes yet.</p>}</aside><div className="note-editor"><label>Note title<input value={title} onChange={(event) => setTitle(event.target.value)} /></label><div className="note-link-insert"><label>Insert stable target<select aria-label="Insert Markdown link target" value={linkTarget} onChange={(event) => setLinkTarget(event.target.value)}><option value="">Choose target</option>{entities.map((entity) => <option value={entity.id} key={entity.id}>{entity.kind} · {entity.label}</option>)}</select></label><button type="button" className="secondary-button" disabled={!linkTarget} onClick={insertWikiLink}>Insert [[link]]</button></div><label>Markdown<textarea ref={editor} aria-label="Markdown note content" value={markdown} onChange={(event) => setMarkdown(event.target.value)} placeholder="# Notes\n\nLink a character with [[Aster]] or a custom label with [[Aster|the courier]]." /></label><div className="note-save-actions"><button type="button" className="text-button" disabled={!selected} onClick={() => void deleteSelectedNote()}>Delete note</button><button type="button" className="primary-button" onClick={() => void save()} disabled={!title.trim()}>Save Markdown note</button></div><section className="note-links" aria-label="Deterministic note links"><h3>Links in this note</h3>{noteLinks.map((link) => <p key={link.id}>{link.targetId ? <>→ {titleFor(entities, link.targetId)}{link.label && <> as “{link.label}”</>}</> : <><strong>Unresolved:</strong> <code>[[{link.targetText}{link.label ? `|${link.label}` : ''}]]</code> <select aria-label={`Repair ${link.targetText}`} value={repairTarget} onChange={(event) => setRepairTarget(event.target.value)}><option value="">Choose stable target</option>{entities.map((entity) => <option value={entity.id} key={entity.id}>{entity.label}</option>)}</select><button type="button" className="text-button" disabled={!repairTarget} onClick={() => void repository.repairNoteLink(link.id, repairTarget).then(async () => { setRepairTarget(''); await onChanged(); })}>Repair</button></>} <small>offset {link.start}</small></p>)}{selected && noteLinks.length === 0 && <p>No exact wiki links in this note.</p>}</section></div></div>
+  return <section className="note-tab-panel" id={`world-panel-note:${note.id}`} role="tabpanel" aria-labelledby={`world-tab-note:${note.id}`}>
+    <header className="note-editor-head"><div><p className="eyebrow">MARKDOWN NOTE</p><h1>{note.title}</h1><p>Only exact <code>[[Note title]]</code> and <code>[[Note title|label]]</code> create local note links.</p></div><div><button type="button" className="text-button" onClick={() => void deleteNote()}>Delete note</button><button type="button" className="primary-button" onClick={() => void save()} disabled={!title.trim()}>Save note</button></div></header>
+    <div className="note-editor-layout"><section className="note-writing"><label>Note title<input value={title} onChange={(event) => setTitle(event.target.value)} /></label><div className="note-link-picker"><label>Insert note link<select value={linkTargetId} onChange={(event) => setLinkTargetId(event.target.value)}><option value="">Choose note</option>{snapshot.markdownNotes.filter((candidate) => candidate.id !== note.id).map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.title}</option>)}</select></label><button type="button" className="secondary-button" disabled={!linkTargetId} onClick={insertLink}>Insert [[note]]</button></div><label>Markdown<textarea ref={editor} aria-label="Markdown note content" value={markdown} onChange={(event) => setMarkdown(event.target.value)} placeholder="# A local note\n\nLink another note with [[Title]] or [[Title|label]]." /></label></section>
+      <aside className="note-link-index" aria-label="Note links and backlinks"><h2>Links</h2>{links.map((link) => link.targetId ? <p key={link.id}><button type="button" className="context-link" onClick={() => onOpen(link.targetId!)}>→ {snapshot.markdownNotes.find((candidate) => candidate.id === link.targetId)?.title ?? 'Missing note'}</button>{link.label && <> as “{link.label}”</>}</p> : <p key={link.id} className="unresolved-note-link"><strong>Unresolved:</strong> <code>[[{link.targetText}{link.label ? `|${link.label}` : ''}]]</code><select aria-label={`Repair ${link.targetText}`} value={repairTargetId} onChange={(event) => setRepairTargetId(event.target.value)}><option value="">Choose note</option>{snapshot.markdownNotes.filter((candidate) => candidate.id !== note.id).map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.title}</option>)}</select><button type="button" className="text-button" disabled={!repairTargetId} onClick={() => void repository.repairNoteLink(link.id, repairTargetId).then(async () => { setRepairTargetId(''); await onRefresh(); }).catch((error) => onError(error instanceof Error ? error.message : String(error)))}>Repair</button></p>)}{links.length === 0 && <p>No wiki links in this note.</p>}<h2>Backlinks</h2>{backlinks.map((link) => <p key={link.id}><button type="button" className="context-link" onClick={() => onOpen(link.noteId)}>{snapshot.markdownNotes.find((candidate) => candidate.id === link.noteId)?.title ?? 'Missing note'}</button></p>)}{backlinks.length === 0 && <p>No note backlinks.</p>}</aside>
+    </div>
   </section>;
 }
 
-function CanvasGraph({ repository, canvas, entities, onError, onChanged }: { repository: ProjectRepository; canvas: StoryCanvas; entities: EntityOption[]; onError: (message: string) => void; onChanged: () => Promise<void> }) {
+function NoteCanvas({ repository, canvas, snapshot, onRefresh, onError }: { repository: ProjectRepository; canvas: StoryCanvas; snapshot: ProjectSnapshot; onRefresh: () => Promise<void>; onError: (message: string) => void }) {
   const [projection, setProjection] = useState<CanvasProjection>();
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
-  const [nodeToAdd, setNodeToAdd] = useState('');
-  const [relationshipType, setRelationshipType] = useState<RelationshipType>('related-to');
+  const [noteToAdd, setNoteToAdd] = useState('');
   const [viewport, setViewport] = useState<CanvasViewport>(canvas.viewport);
-  const [relationshipLabels, setRelationshipLabels] = useState<Record<string, string>>({});
   const instance = useRef<ReactFlowInstance<Node, Edge>>();
-
   const load = useCallback(async () => {
-    const [next, relationships] = await Promise.all([repository.getCanvasProjection(canvas.id), repository.listRelationships()]);
-    const labels = Object.fromEntries(relationships.map((relationship) => [relationship.id, relationship.type]));
-    setProjection(next); setViewport(next.canvas.viewport); setRelationshipLabels(labels);
-    setNodes(next.nodes.map((node) => ({ id: node.id, type: 'default', position: node.position, data: { label: node.label }, ariaLabel: `${node.entityKind}: ${node.label}` })));
-    setEdges(next.edges.map((edge) => ({ id: edge.id, source: edge.sourceNodeId, target: edge.targetNodeId, label: labels[edge.relationshipId] ?? 'relationship', focusable: true })));
-  }, [canvas.id, repository]);
+    const next = await repository.getCanvasProjection(canvas.id);
+    const labels = new Map(snapshot.noteLinks.map((link) => [link.id, link.label ? `[[${link.targetText}|${link.label}]]` : `[[${link.targetText}]]`]));
+    setProjection(next); setViewport(next.canvas.viewport);
+    setNodes(next.nodes.map((node) => ({ id: node.id, position: node.position, data: { label: node.label }, ariaLabel: `Markdown note: ${node.label}` })));
+    setEdges(next.edges.map((edge) => ({ id: edge.id, source: edge.sourceNodeId, target: edge.targetNodeId, label: labels.get(edge.noteLinkId) ?? 'wiki link', focusable: true })));
+  }, [canvas.id, repository, snapshot.noteLinks]);
   useEffect(() => { void load().catch((error) => onError(error instanceof Error ? error.message : String(error))); }, [load, onError]);
-  // Canvas labels are a projection. A domain rename updates this view without
-  // ever writing a copied label back into the canvas record.
-  useEffect(() => {
-    setProjection((current) => {
-      if (!current) return current;
-      const refreshed = current.nodes.map((node) => ({ ...node, label: entities.find((entity) => entity.id === node.entityId)?.label ?? node.label }));
-      setNodes((currentNodes) => currentNodes.map((node) => ({ ...node, data: { ...node.data, label: refreshed.find((candidate) => candidate.id === node.id)?.label ?? node.data.label } })));
-      return { ...current, nodes: refreshed };
-    });
-  }, [entities]);
-
   const saveLayout = async (nextNodes: Node[], nextViewport = viewport) => {
     if (!projection) return;
-    try {
-      const saved = await repository.saveCanvasLayout(canvas.id, nextNodes.map((node) => ({ id: node.id, position: node.position })), nextViewport, projection.canvas.revision);
-      setProjection((current) => current ? { ...current, canvas: saved } : current);
-      setViewport(saved.viewport);
-      await onChanged();
-    } catch (error) { onError(error instanceof Error ? error.message : String(error)); await load(); }
+    try { const saved = await repository.saveCanvasLayout(canvas.id, nextNodes.map((node) => ({ id: node.id, position: node.position })), nextViewport, projection.canvas.revision); setProjection((current) => current ? { ...current, canvas: saved } : current); setViewport(saved.viewport); await onRefresh(); }
+    catch (error) { onError(error instanceof Error ? error.message : String(error)); await load(); }
   };
-  const onNodesChange = (changes: NodeChange<Node>[]) => setNodes((current) => applyNodeChanges(changes, current));
-  const onConnect = async (connection: Connection) => {
-    if (!projection || !connection.source || !connection.target) return;
-    const source = projection.nodes.find((node) => node.id === connection.source);
-    const target = projection.nodes.find((node) => node.id === connection.target);
-    if (!source || !target) return;
-    try {
-      const relationship = await repository.createRelationship(source.entityId, target.entityId, relationshipType);
-      await repository.connectCanvasNodes(canvas.id, source.id, target.id, relationship.id, projection.canvas.revision);
-      await load(); await onChanged();
-    } catch (error) { onError(error instanceof Error ? error.message : String(error)); await load(); }
-  };
-  const addNode = async () => {
-    if (!projection || !nodeToAdd) return;
-    try { await repository.addCanvasNode(canvas.id, nodeToAdd, { x: 80 + nodes.length * 32, y: 80 + nodes.length * 24 }, projection.canvas.revision); setNodeToAdd(''); await load(); await onChanged(); }
-    catch (error) { onError(error instanceof Error ? error.message : String(error)); }
-  };
-  const removeNodes = async (removed: Node[]) => {
-    if (!projection || !removed.length) return;
-    try {
-      let current = projection.canvas.revision;
-      for (const node of removed) { await repository.removeCanvasNode(canvas.id, node.id, current); current += 1; }
-      await load(); await onChanged();
-    } catch (error) { onError(error instanceof Error ? error.message : String(error)); await load(); }
-  };
-  const nodeLabels = new Map(projection?.nodes.map((node) => [node.id, node.label]));
-  const relationFor = (edgeId: string) => { const relationshipId = projection?.edges.find((edge) => edge.id === edgeId)?.relationshipId; return relationshipId ? relationshipLabels[relationshipId] ?? relationshipId : ''; };
-
-  return <section className="story-canvas" aria-labelledby="story-canvas-title">
-    <div className="canvas-toolbar"><div><p className="eyebrow">REACT FLOW · LOCAL PROJECTION</p><h2 id="story-canvas-title">{canvas.title}</h2></div><label>Add real item<select aria-label="Add real data node" value={nodeToAdd} onChange={(event) => setNodeToAdd(event.target.value)}><option value="">Choose item, chapter, or scene</option>{entities.filter((entity) => !projection?.nodes.some((node) => node.entityId === entity.id)).map((entity) => <option key={entity.id} value={entity.id}>{entity.kind} · {entity.label}</option>)}</select></label><button type="button" className="secondary-button" onClick={addNode} disabled={!nodeToAdd}>Add node</button><label>New edge type<select aria-label="Relationship type for graph connection" value={relationshipType} onChange={(event) => setRelationshipType(event.target.value as RelationshipType)}>{RELATIONSHIP_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}</select></label></div>
-    <p className="canvas-note">Drag a handle between nodes to create a validated <strong>{relationshipType}</strong> relationship. Positions and viewport save separately from domain content. Press Delete on a focused graph node to remove only its placement; Home fits the graph.</p>
-    <div className="react-flow-shell" role="region" aria-label="Story relationship graph" tabIndex={0} onKeyDown={(event) => { if (event.key === 'Home') { event.preventDefault(); void instance.current?.fitView({ padding: 0.2 }); } }}>
-      <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onNodeDragStop={(_, node) => { const next = nodes.map((current) => current.id === node.id ? { ...current, position: node.position } : current); setNodes(next); void saveLayout(next); }} onNodesDelete={(removed) => void removeNodes(removed)} onConnect={(connection) => void onConnect(connection)} onMoveEnd={(_, nextViewport) => { const value = { x: nextViewport.x, y: nextViewport.y, zoom: nextViewport.zoom }; void saveLayout(nodes, value); }} onInit={(next) => { instance.current = next; }} defaultViewport={canvas.viewport} deleteKeyCode={['Backspace', 'Delete']} nodesFocusable edgesFocusable fitView>
-        <Background /><MiniMap pannable zoomable /><Controls showInteractive={false} />
-      </ReactFlow>
-    </div>
-    <section className="canvas-outline" aria-label="Canvas outline fallback">
-      <h3>Canvas outline</h3><p>Keyboard-accessible list of every graph node and relationship.</p>
-      <ul>{projection?.nodes.map((node) => <li key={node.id}><button type="button" onClick={() => { const flowNode = nodes.find((candidate) => candidate.id === node.id); if (flowNode) instance.current?.setCenter(flowNode.position.x, flowNode.position.y, { zoom: 1.2, duration: 150 }); }}>{node.entityKind} · {node.label}</button></li>)}</ul>
-      <h4>Relationships</h4><ul>{projection?.edges.map((edge) => <li key={edge.id}>{nodeLabels.get(edge.sourceNodeId)} <span aria-hidden="true">→</span> {nodeLabels.get(edge.targetNodeId)} <small>{relationFor(edge.id)}</small></li>)}{projection?.edges.length === 0 && <li>No graph relationships yet.</li>}</ul>
-    </section>
+  const addNote = async () => { if (!projection || !noteToAdd) return; try { await repository.addCanvasNode(canvas.id, noteToAdd, { x: 80 + nodes.length * 32, y: 80 + nodes.length * 24 }, projection.canvas.revision); setNoteToAdd(''); await load(); await onRefresh(); } catch (error) { onError(error instanceof Error ? error.message : String(error)); } };
+  const removeNodes = async (removed: Node[]) => { if (!projection || !removed.length) return; try { let revision = projection.canvas.revision; for (const node of removed) { await repository.removeCanvasNode(canvas.id, node.id, revision); revision += 1; } await load(); await onRefresh(); } catch (error) { onError(error instanceof Error ? error.message : String(error)); await load(); } };
+  const labels = new Map(projection?.nodes.map((node) => [node.id, node.label]));
+  return <section className="canvas-tab-panel" id={`world-panel-canvas:${canvas.id}`} role="tabpanel" aria-labelledby={`world-tab-canvas:${canvas.id}`}><header className="note-editor-head"><div><p className="eyebrow">USER-CREATED NOTE CANVAS</p><h1>{canvas.title}</h1><p>Only Markdown note nodes appear here. Edges are resolved wiki links; dragging changes only saved layout and viewport.</p></div></header>
+    <div className="canvas-toolbar"><label>Add note<select value={noteToAdd} onChange={(event) => setNoteToAdd(event.target.value)}><option value="">Choose note</option>{snapshot.markdownNotes.filter((note) => !projection?.nodes.some((node) => node.entityId === note.id)).map((note) => <option key={note.id} value={note.id}>{note.title}</option>)}</select></label><button type="button" className="secondary-button" disabled={!noteToAdd} onClick={() => void addNote()}>Add note node</button></div>
+    <div className="react-flow-shell" role="region" aria-label="Note canvas" tabIndex={0} onKeyDown={(event) => { if (event.key === 'Home') { event.preventDefault(); void instance.current?.fitView({ padding: 0.2 }); } }}><ReactFlow nodes={nodes} edges={edges} onNodesChange={(changes: NodeChange<Node>[]) => setNodes((current) => applyNodeChanges(changes, current))} onNodeDragStop={(_, node) => { const next = nodes.map((current) => current.id === node.id ? { ...current, position: node.position } : current); setNodes(next); void saveLayout(next); }} onNodesDelete={(removed) => void removeNodes(removed)} onMoveEnd={(_, next) => void saveLayout(nodes, { x: next.x, y: next.y, zoom: next.zoom })} onInit={(next) => { instance.current = next; }} defaultViewport={canvas.viewport} deleteKeyCode={['Backspace', 'Delete']} nodesFocusable edgesFocusable nodesConnectable={false} fitView><Background /><MiniMap pannable zoomable /><Controls showInteractive={false} /></ReactFlow></div>
+    <section className="canvas-outline" aria-label="Note canvas outline fallback"><h2>Canvas outline</h2><p>Keyboard-accessible list of every note node and resolved wiki-link edge.</p><ul>{projection?.nodes.map((node) => <li key={node.id}><button type="button" onClick={() => { const flowNode = nodes.find((candidate) => candidate.id === node.id); if (flowNode) instance.current?.setCenter(flowNode.position.x, flowNode.position.y, { zoom: 1.2, duration: 150 }); }}>Note · {node.label}</button></li>)}</ul><h3>Wiki links</h3><ul>{projection?.edges.map((edge) => <li key={edge.id}>{labels.get(edge.sourceNodeId)} <span aria-hidden="true">→</span> {labels.get(edge.targetNodeId)}</li>)}{projection?.edges.length === 0 && <li>No resolved wiki links between placed notes.</li>}</ul></section>
   </section>;
 }
 
-export function WorldbuildingWorkspace({ repository, snapshot, selectedStoryId, onRefresh, onNavigateDocument, onError }: { repository: ProjectRepository; snapshot: ProjectSnapshot; selectedStoryId?: string; onRefresh: () => Promise<void>; onNavigateDocument: (anchor: DocumentAnchor) => void; onError: (message: string) => void }) {
-  const [selectedItemId, setSelectedItemId] = useState<string>();
-  const [creatingItem, setCreatingItem] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [search, setSearch] = useState('');
-  const [searchResults, setSearchResults] = useState<WorldbuildingItem[]>(snapshot.worldbuildingItems);
-  const [backlinks, setBacklinks] = useState<Backlink[]>([]);
-  const [sourceId, setSourceId] = useState('');
-  const [targetId, setTargetId] = useState('');
-  const [relationshipType, setRelationshipType] = useState<RelationshipType>('related-to');
-  const [canvasId, setCanvasId] = useState<string>();
-  const [canvasTitle, setCanvasTitle] = useState('Story map');
-  const [linkSceneId, setLinkSceneId] = useState('');
-  const [linkTargetId, setLinkTargetId] = useState('');
-  const [unresolvedLabel, setUnresolvedLabel] = useState('');
-  const [repairTargetId, setRepairTargetId] = useState('');
-  const [requestedNoteContext, setRequestedNoteContext] = useState<{ noteId: string; start: number }>();
-  const onNavigateNote = (noteId: string, start: number) => setRequestedNoteContext({ noteId, start });
-  const selectedItem = snapshot.worldbuildingItems.find((item) => item.id === selectedItemId);
-  const entities = useMemo(() => entityOptions(snapshot, selectedStoryId), [snapshot, selectedStoryId]);
-  const activeCanvases = snapshot.canvases.filter((canvas) => !selectedStoryId || canvas.storyId === selectedStoryId);
-  const activeCanvas = activeCanvases.find((canvas) => canvas.id === canvasId) ?? activeCanvases[0];
-
-  useEffect(() => { if (!creatingItem && (!selectedItemId || !snapshot.worldbuildingItems.some((item) => item.id === selectedItemId))) setSelectedItemId(snapshot.worldbuildingItems[0]?.id); }, [creatingItem, selectedItemId, snapshot.worldbuildingItems]);
-  useEffect(() => { if (!canvasId || !activeCanvases.some((canvas) => canvas.id === canvasId)) setCanvasId(activeCanvases[0]?.id); }, [activeCanvases, canvasId]);
-  useEffect(() => { if (!linkSceneId) setLinkSceneId(snapshot.scenes[0]?.id ?? ''); }, [linkSceneId, snapshot.scenes]);
-  useEffect(() => { let active = true; void repository.searchWorldbuilding(search).then((items) => { if (active) setSearchResults(items); }).catch((error) => onError(error instanceof Error ? error.message : String(error))); return () => { active = false; }; }, [onError, repository, search, snapshot.worldbuildingItems]);
-  useEffect(() => { if (!selectedItem) { setBacklinks([]); return; } void repository.listBacklinks(selectedItem.id).then(setBacklinks).catch((error) => onError(error instanceof Error ? error.message : String(error))); }, [onError, repository, selectedItem]);
-
-  const saveItem = async (value: { kind: WorldbuildingItemKind; title: string; aliases: string[]; properties: WorldbuildingProperties; revision?: number }) => {
-    try {
-      const item = selectedItem && value.revision ? await repository.updateWorldbuildingItem(selectedItem.id, { title: value.title, aliases: value.aliases, properties: value.properties }, value.revision) : await repository.createWorldbuildingItem(value);
-      setCreatingItem(false); setSelectedItemId(item.id); setEditing(false); await onRefresh();
-    } catch (error) { onError(error instanceof Error ? error.message : String(error)); }
-  };
-  const deleteSelectedItem = async () => {
-    if (!selectedItem || !window.confirm(`Remove ${selectedItem.title}? Referenced records are protected.`)) return;
-    try { await repository.deleteWorldbuildingItem(selectedItem.id, selectedItem.revision); await onRefresh(); }
-    catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (message.startsWith('Cannot delete') && window.confirm('Remove relationships and canvas placements? Markdown and document links will stay visibly unresolved for repair.')) {
-        try { await repository.deleteWorldbuildingItem(selectedItem.id, selectedItem.revision, 'remove-references'); await onRefresh(); } catch (retryError) { onError(retryError instanceof Error ? retryError.message : String(retryError)); }
-      } else onError(message);
-    }
-  };
-  const createRelationship = async () => { if (!sourceId || !targetId) return; try { await repository.createRelationship(sourceId, targetId, relationshipType); await onRefresh(); } catch (error) { onError(error instanceof Error ? error.message : String(error)); } };
-  const createCanvas = async () => { if (!selectedStoryId) { onError('Choose a story before creating a scoped canvas.'); return; } try { const canvas = await repository.createCanvas(selectedStoryId, canvasTitle); setCanvasId(canvas.id); await onRefresh(); } catch (error) { onError(error instanceof Error ? error.message : String(error)); } };
-  const createDocumentLink = async () => {
-    const scene = snapshot.scenes.find((candidate) => candidate.id === linkSceneId); if (!scene) return;
-    try { const document = await repository.getDocument(scene.documentId); const block = document.document.blocks[0]; if (!block) throw new Error('The selected scene has no structured block to anchor.'); await repository.createDocumentLink({ documentId: scene.documentId, blockId: block.id, start: 0, end: 0 }, linkTargetId || undefined, linkTargetId ? undefined : unresolvedLabel); setLinkTargetId(''); setUnresolvedLabel(''); await onRefresh(); } catch (error) { onError(error instanceof Error ? error.message : String(error)); }
-  };
-
-  return <main className="worldbuilding-workspace">
-    <header className="worldbuilding-head"><div><p className="eyebrow">OFFLINE WORLDBUILDING</p><h1>World, people, places, and their context.</h1><p>Stable IDs keep links intact when titles change. Weave never infers links from arbitrary prose.</p></div><button type="button" className="primary-button" onClick={() => { setCreatingItem(true); setSelectedItemId(undefined); setEditing(true); }}>+ New item</button></header>
-    <div className="worldbuilding-grid">
-      <aside className="world-catalog" aria-label="Worldbuilding catalog"><label>Search titles, aliases, terms, and links<input value={search} placeholder="Search locally" onChange={(event) => setSearch(event.target.value)} /></label><div className="catalog-list">{searchResults.map((item) => <button type="button" key={item.id} className={item.id === selectedItemId ? 'selected' : ''} onClick={() => { setCreatingItem(false); setSelectedItemId(item.id); setEditing(false); }}><span className={`kind-pill kind-${item.kind}`}>{item.kind}</span><strong>{item.title}</strong>{item.aliases.length > 0 && <small>{item.aliases.join(' · ')}</small>}</button>)}{searchResults.length === 0 && <p>No local matches.</p>}</div></aside>
-      <section className="world-detail" aria-live="polite">{editing ? <><h2>{selectedItem ? `Edit ${selectedItem.title}` : 'Create worldbuilding item'}</h2><ItemForm item={selectedItem} onSave={saveItem} onCancel={() => { setCreatingItem(false); setEditing(false); }} /></> : selectedItem ? <><div className="detail-title"><div><span className={`kind-pill kind-${selectedItem.kind}`}>{selectedItem.kind}</span><h2>{selectedItem.title}</h2></div><div><button type="button" className="secondary-button" onClick={() => { setCreatingItem(false); setEditing(true); }}>Edit</button><button type="button" className="text-button" onClick={() => void deleteSelectedItem()}>Delete</button></div></div><p className="aliases"><strong>Aliases:</strong> {selectedItem.aliases.length ? selectedItem.aliases.join(', ') : 'None'}</p><dl>{Object.entries(selectedItem.properties).filter(([, value]) => value).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl><section className="link-panel"><h3>Outgoing links</h3>{snapshot.relationships.filter((relationship) => relationship.sourceId === selectedItem.id).map((relationship) => <p key={relationship.id}><strong>{relationship.type}</strong> → {titleFor(entities, relationship.targetId)} <button type="button" className="text-button" onClick={() => void repository.deleteRelationship(relationship.id).then(onRefresh)}>Remove</button></p>)}{!snapshot.relationships.some((relationship) => relationship.sourceId === selectedItem.id) && <p>No outgoing links.</p>}<h3>Backlinks</h3>{backlinks.map((backlink) => <p key={backlink.id}>{backlink.kind === 'relationship' ? <><strong>{backlink.type}</strong> from <button type="button" className="context-link" onClick={() => setSelectedItemId(backlink.sourceId)}>{backlink.sourceTitle}</button></> : backlink.kind === 'document' ? <>Document link from <button type="button" className="context-link" onClick={() => onNavigateDocument(backlink.anchor)}>{backlink.sourceTitle}</button> <small>block context</small></> : <>Markdown link from <button type="button" className="context-link" onClick={() => onNavigateNote(backlink.noteId, backlink.start)}>{backlink.sourceTitle}</button> <small>wiki-link context</small></>}</p>)}{backlinks.length === 0 && <p>No backlinks.</p>}</section></> : <p>Select a catalog item or create one.</p>}</section>
-    </div>
-    <section className="relationship-composer" aria-labelledby="relationship-composer-title"><h2 id="relationship-composer-title">Create typed relationship</h2><label>Source<select value={sourceId} onChange={(event) => setSourceId(event.target.value)}><option value="">Choose source</option>{entities.map((entity) => <option key={entity.id} value={entity.id}>{entity.kind} · {entity.label}</option>)}</select></label><label>Type<select value={relationshipType} onChange={(event) => setRelationshipType(event.target.value as RelationshipType)}>{RELATIONSHIP_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}</select></label><label>Target<select value={targetId} onChange={(event) => setTargetId(event.target.value)}><option value="">Choose target</option>{entities.filter((entity) => entity.id !== sourceId).map((entity) => <option key={entity.id} value={entity.id}>{entity.kind} · {entity.label}</option>)}</select></label><button type="button" className="primary-button" onClick={() => void createRelationship()} disabled={!sourceId || !targetId}>Link items</button></section>
-    <section className="document-link-panel" aria-labelledby="document-link-title"><div><p className="eyebrow">EXPLICIT DOCUMENT LINKS</p><h2 id="document-link-title">Anchored, not parsed</h2><p>Create an explicit stable-ID anchor at a scene’s first block. Empty target labels remain visible until repaired.</p></div><label>Scene<select value={linkSceneId} onChange={(event) => setLinkSceneId(event.target.value)}>{snapshot.scenes.map((scene) => <option key={scene.id} value={scene.id}>{scene.title}</option>)}</select></label><label>Target<select value={linkTargetId} onChange={(event) => setLinkTargetId(event.target.value)}><option value="">Unresolved link</option>{snapshot.worldbuildingItems.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>{!linkTargetId && <label>Visible repair label<input value={unresolvedLabel} placeholder="Unresolved name" onChange={(event) => setUnresolvedLabel(event.target.value)} /></label>}<button type="button" className="secondary-button" onClick={() => void createDocumentLink()} disabled={!linkSceneId || (!linkTargetId && !unresolvedLabel.trim())}>Add document link</button><div className="document-link-list">{snapshot.documentLinks.map((link) => <p key={link.id}>{link.targetId ? <>Linked to {titleFor(entities, link.targetId)}</> : <><strong>Unresolved:</strong> {link.unresolvedLabel} <select aria-label={`Repair ${link.unresolvedLabel}`} value={repairTargetId} onChange={(event) => setRepairTargetId(event.target.value)}><option value="">Choose target</option>{snapshot.worldbuildingItems.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select><button type="button" className="text-button" disabled={!repairTargetId} onClick={() => void repository.repairDocumentLink(link.id, repairTargetId).then(async () => { setRepairTargetId(''); await onRefresh(); })}>Repair</button></>} <small>document anchor</small></p>)}{snapshot.documentLinks.length === 0 && <p>No document links yet.</p>}</div></section>
-    <MarkdownNotes repository={repository} snapshot={snapshot} entities={entities} onChanged={onRefresh} onError={onError} requestedNoteId={requestedNoteContext?.noteId} requestedOffset={requestedNoteContext?.start} />
-    <section className="canvas-section" aria-labelledby="canvas-section-title"><div className="canvas-section-head"><div><p className="eyebrow">STORY-SCOPED REACT FLOW</p><h2 id="canvas-section-title">Relationship canvas</h2></div><label>Canvas title<input value={canvasTitle} onChange={(event) => setCanvasTitle(event.target.value)} /></label><button type="button" className="primary-button" onClick={() => void createCanvas()} disabled={!selectedStoryId}>New canvas</button>{activeCanvases.length > 0 && <label>Open canvas<select value={activeCanvas?.id ?? ''} onChange={(event) => setCanvasId(event.target.value)}>{activeCanvases.map((canvas) => <option key={canvas.id} value={canvas.id}>{canvas.title}</option>)}</select></label>}</div>{activeCanvas ? <CanvasGraph repository={repository} canvas={activeCanvas} entities={entities} onError={onError} onChanged={onRefresh} /> : <p>Choose a story in Manuscript, then create a scoped canvas.</p>}</section>
-  </main>;
+export function WorldbuildingWorkspace({ repository, snapshot, selectedStoryId, onRefresh, onClose, onError }: { repository: ProjectRepository; snapshot: ProjectSnapshot; selectedStoryId?: string; onRefresh: () => Promise<void>; onClose: () => void; onError: (message: string) => void }) {
+  const [tabs, setTabs] = useState<OpenTab[]>([]); const [activeKey, setActiveKey] = useState<string>();
+  const open = (tab: OpenTab) => { const key = keyFor(tab); setTabs((current) => current.some((candidate) => keyFor(candidate) === key) ? current : [...current, tab]); setActiveKey(key); };
+  const close = (key: string) => setTabs((current) => { const index = current.findIndex((tab) => keyFor(tab) === key); const next = current.filter((tab) => keyFor(tab) !== key); setActiveKey((active) => active === key ? (next[index] ? keyFor(next[index]) : next[index - 1] ? keyFor(next[index - 1]) : undefined) : active); return next; });
+  useEffect(() => { setTabs((current) => current.filter((tab) => tab.kind === 'note' ? snapshot.markdownNotes.some((note) => note.id === tab.id) : snapshot.canvases.some((canvas) => canvas.id === tab.id))); }, [snapshot.markdownNotes, snapshot.canvases]);
+  const active = tabs.find((tab) => keyFor(tab) === activeKey) ?? tabs[0];
+  const createNote = async () => { try { const note = await repository.createMarkdownNote('Untitled note'); await onRefresh(); open({ kind: 'note', id: note.id }); } catch (error) { onError(error instanceof Error ? error.message : String(error)); } };
+  const createCanvas = async () => { if (!selectedStoryId) { onError('Choose a manuscript story before creating a local note canvas.'); return; } const title = window.prompt('Canvas title', 'Untitled canvas'); if (!title?.trim()) return; try { const canvas = await repository.createCanvas(selectedStoryId, title.trim()); await onRefresh(); open({ kind: 'canvas', id: canvas.id }); } catch (error) { onError(error instanceof Error ? error.message : String(error)); } };
+  const note = active?.kind === 'note' ? snapshot.markdownNotes.find((candidate) => candidate.id === active.id) : undefined;
+  const canvas = active?.kind === 'canvas' ? snapshot.canvases.find((candidate) => candidate.id === active.id) : undefined;
+  return <main id="worldbuilding-workspace" role="tabpanel" aria-labelledby="worldbuilding-workspace-tab" className="worldbuilding-workspace"><aside className="worldbuilding-nav" aria-label="Worldbuilding navigation"><section><p className="eyebrow">MARKDOWN NOTES</p><h2>Notes</h2>{snapshot.markdownNotes.map((note) => <button type="button" key={note.id} onClick={() => open({ kind: 'note', id: note.id })}>{note.title}</button>)}{snapshot.markdownNotes.length === 0 && <p>No notes yet.</p>}</section><section><p className="eyebrow">CANVASES</p><h2>Canvases</h2>{snapshot.canvases.map((canvas) => <button type="button" key={canvas.id} onClick={() => open({ kind: 'canvas', id: canvas.id })}>{canvas.title}</button>)}{snapshot.canvases.length === 0 && <p>No canvases yet.</p>}</section></aside><section className="worldbuilding-main">{tabs.length > 0 && <TabStrip tabs={tabs} activeKey={keyFor(active ?? tabs[0])} snapshot={snapshot} onActivate={setActiveKey} onClose={close} />}{note ? <NoteEditor repository={repository} note={note} snapshot={snapshot} onRefresh={onRefresh} onOpen={(id) => open({ kind: 'note', id })} onClose={() => close(keyFor({ kind: 'note', id: note.id }))} onError={onError} /> : canvas ? <NoteCanvas repository={repository} canvas={canvas} snapshot={snapshot} onRefresh={onRefresh} onError={onError} /> : <section className="worldbuilding-empty" aria-label="Worldbuilding empty state"><button type="button" onClick={() => void createNote()}>Create new note</button><button type="button" onClick={() => void createCanvas()}>Create new canva</button><button type="button" onClick={onClose}>Close</button></section>}</section></main>;
 }
