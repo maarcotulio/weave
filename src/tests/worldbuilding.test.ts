@@ -126,6 +126,9 @@ describe('offline persistence and accessible workspace', () => {
     expect(styles).toContain('.worldbuilding-workspace { display: flex;');
     expect(styles).toContain('.worldbuilding-main { display: flex; flex: 1; flex-direction: column;');
     expect(styles).toContain('.worldbuilding-empty { display: flex; flex: 1; min-height: 0; width: 100%; flex-direction: column; align-items: center; justify-content: center;');
-    expect(styles).toContain('.worldbuilding-create-icon { display: grid; place-items: center;');
+    expect(styles).toContain('.worldbuilding-sidebar-heading { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px;');
+    expect(styles).toContain('.worldbuilding-create-icon { display: grid; place-items: center; flex: 0 0 27px; width: 27px; min-width: 27px; max-width: 27px; height: 27px; min-height: 27px; max-height: 27px; padding: 0;');
+    expect(styles).toContain('.worldbuilding-sidebar-group > button {');
+    expect(styles).not.toContain('.worldbuilding-sidebar-group button {');
   });
 });
