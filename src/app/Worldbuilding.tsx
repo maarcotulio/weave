@@ -19,6 +19,7 @@ import {
   type CanvasProjection,
   type CanvasViewport,
   type DocumentAnchor,
+  type MarkdownNote,
   type ProjectSnapshot,
   type RelationshipType,
   type StoryCanvas,
@@ -41,6 +42,7 @@ function entityOptions(snapshot: ProjectSnapshot, storyId?: string): EntityOptio
   const setIds = new Set(snapshot.sceneSets.filter((set) => chapterIds.has(set.chapterId)).map((set) => set.id));
   return [
     ...snapshot.worldbuildingItems.map((item) => ({ id: item.id, label: item.title, kind: item.kind })),
+    ...snapshot.markdownNotes.map((note) => ({ id: note.id, label: note.title, kind: 'note' })),
     ...snapshot.chapters.filter((chapter) => !storyId || chapter.storyId === storyId).map((chapter) => ({ id: chapter.id, label: chapter.title, kind: 'chapter' })),
     ...snapshot.scenes.filter((scene) => !storyId || setIds.has(scene.sceneSetId)).map((scene) => ({ id: scene.id, label: scene.title, kind: 'scene' }))
   ];
@@ -65,6 +67,52 @@ function ItemForm({ item, onSave, onCancel }: { item?: WorldbuildingItem; onSave
     {propertyFields[kind].map((field) => <label key={field.key}>{field.label}<input value={properties[field.key] ?? ''} placeholder={field.placeholder} onChange={(event) => setProperties((current) => ({ ...current, [field.key]: event.target.value }))} /></label>)}
     <div className="world-form-actions"><button type="button" className="text-button" onClick={onCancel}>Cancel</button><button type="submit" className="primary-button">{item ? 'Save item' : 'Create item'}</button></div>
   </form>;
+}
+
+function MarkdownNotes({ repository, snapshot, entities, onChanged, onError, requestedNoteId, requestedOffset }: { repository: ProjectRepository; snapshot: ProjectSnapshot; entities: EntityOption[]; onChanged: () => Promise<void>; onError: (message: string) => void; requestedNoteId?: string; requestedOffset?: number }) {
+  const [selectedNoteId, setSelectedNoteId] = useState<string>();
+  const [newNote, setNewNote] = useState(false);
+  const [title, setTitle] = useState('');
+  const [markdown, setMarkdown] = useState('');
+  const [noteSearch, setNoteSearch] = useState('');
+  const [noteResults, setNoteResults] = useState<MarkdownNote[]>(snapshot.markdownNotes);
+  const [linkTarget, setLinkTarget] = useState('');
+  const [repairTarget, setRepairTarget] = useState('');
+  const editor = useRef<HTMLTextAreaElement>(null);
+  const panel = useRef<HTMLElement>(null);
+  const selected = snapshot.markdownNotes.find((note) => note.id === selectedNoteId);
+  const noteLinks = snapshot.noteLinks.filter((link) => link.noteId === selectedNoteId);
+  useEffect(() => { if (!newNote && (!selectedNoteId || !snapshot.markdownNotes.some((note) => note.id === selectedNoteId))) setSelectedNoteId(snapshot.markdownNotes[0]?.id); }, [newNote, selectedNoteId, snapshot.markdownNotes]);
+  useEffect(() => { if (!selected) return; setTitle(selected.title); setMarkdown(selected.markdown); }, [selected]);
+  useEffect(() => { if (!requestedNoteId) return; setNewNote(false); setSelectedNoteId(requestedNoteId); panel.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, [requestedNoteId]);
+  useEffect(() => { if (requestedOffset === undefined || !editor.current || selectedNoteId !== requestedNoteId) return; editor.current.focus(); editor.current.setSelectionRange(requestedOffset, requestedOffset); }, [requestedNoteId, requestedOffset, selectedNoteId, markdown]);
+  useEffect(() => { let active = true; void repository.searchMarkdownNotes(noteSearch).then((notes) => { if (active) setNoteResults(notes); }).catch((error) => onError(error instanceof Error ? error.message : String(error))); return () => { active = false; }; }, [noteSearch, onError, repository, snapshot.markdownNotes]);
+  const save = async () => {
+    try {
+      const note = selected ? await repository.updateMarkdownNote(selected.id, { title, markdown }, selected.revision) : await repository.createMarkdownNote(title, markdown);
+      setNewNote(false); setSelectedNoteId(note.id); await onChanged();
+    } catch (error) { onError(error instanceof Error ? error.message : String(error)); }
+  };
+  const insertWikiLink = () => {
+    const target = entities.find((entity) => entity.id === linkTarget); if (!target) return;
+    const field = editor.current; const start = field?.selectionStart ?? markdown.length; const end = field?.selectionEnd ?? start; const token = `[[${target.label}]]`;
+    setMarkdown(`${markdown.slice(0, start)}${token}${markdown.slice(end)}`); setLinkTarget('');
+    requestAnimationFrame(() => { editor.current?.focus(); editor.current?.setSelectionRange(start + token.length, start + token.length); });
+  };
+  const deleteSelectedNote = async () => {
+    if (!selected || !window.confirm(`Remove ${selected.title}?`)) return;
+    try { await repository.deleteMarkdownNote(selected.id, selected.revision); setNewNote(true); setSelectedNoteId(undefined); setTitle('Untitled note'); setMarkdown(''); await onChanged(); }
+    catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.startsWith('Cannot delete') && window.confirm('Remove relationships and canvas placements? Incoming Markdown links will remain unresolved for repair.')) {
+        try { await repository.deleteMarkdownNote(selected.id, selected.revision, 'remove-references'); setNewNote(true); setSelectedNoteId(undefined); setTitle('Untitled note'); setMarkdown(''); await onChanged(); } catch (retryError) { onError(retryError instanceof Error ? retryError.message : String(retryError)); }
+      } else onError(message);
+    }
+  };
+  return <section ref={panel} className="markdown-notes" aria-labelledby="markdown-notes-title">
+    <div className="notes-head"><div><p className="eyebrow">MARKDOWN NOTES</p><h2 id="markdown-notes-title">Linked notes</h2><p>Only exact <code>[[Target]]</code> and <code>[[Target|label]]</code> tokens become links. Titles and aliases resolve locally and deterministically; prose is never guessed.</p></div><button type="button" className="primary-button" onClick={() => { setNewNote(true); setSelectedNoteId(undefined); setTitle('Untitled note'); setMarkdown(''); }}>+ New note</button></div>
+    <div className="notes-grid"><aside className="note-list" aria-label="Markdown notes"><label>Search notes<input value={noteSearch} placeholder="Search local Markdown" onChange={(event) => setNoteSearch(event.target.value)} /></label>{noteResults.map((note) => <button type="button" className={note.id === selectedNoteId ? 'selected' : ''} key={note.id} onClick={() => { setNewNote(false); setSelectedNoteId(note.id); }}>{note.title}</button>)}{noteResults.length === 0 && <p>No notes yet.</p>}</aside><div className="note-editor"><label>Note title<input value={title} onChange={(event) => setTitle(event.target.value)} /></label><div className="note-link-insert"><label>Insert stable target<select aria-label="Insert Markdown link target" value={linkTarget} onChange={(event) => setLinkTarget(event.target.value)}><option value="">Choose target</option>{entities.map((entity) => <option value={entity.id} key={entity.id}>{entity.kind} · {entity.label}</option>)}</select></label><button type="button" className="secondary-button" disabled={!linkTarget} onClick={insertWikiLink}>Insert [[link]]</button></div><label>Markdown<textarea ref={editor} aria-label="Markdown note content" value={markdown} onChange={(event) => setMarkdown(event.target.value)} placeholder="# Notes\n\nLink a character with [[Aster]] or a custom label with [[Aster|the courier]]." /></label><div className="note-save-actions"><button type="button" className="text-button" disabled={!selected} onClick={() => void deleteSelectedNote()}>Delete note</button><button type="button" className="primary-button" onClick={() => void save()} disabled={!title.trim()}>Save Markdown note</button></div><section className="note-links" aria-label="Deterministic note links"><h3>Links in this note</h3>{noteLinks.map((link) => <p key={link.id}>{link.targetId ? <>→ {titleFor(entities, link.targetId)}{link.label && <> as “{link.label}”</>}</> : <><strong>Unresolved:</strong> <code>[[{link.targetText}{link.label ? `|${link.label}` : ''}]]</code> <select aria-label={`Repair ${link.targetText}`} value={repairTarget} onChange={(event) => setRepairTarget(event.target.value)}><option value="">Choose stable target</option>{entities.map((entity) => <option value={entity.id} key={entity.id}>{entity.label}</option>)}</select><button type="button" className="text-button" disabled={!repairTarget} onClick={() => void repository.repairNoteLink(link.id, repairTarget).then(async () => { setRepairTarget(''); await onChanged(); })}>Repair</button></>} <small>offset {link.start}</small></p>)}{selected && noteLinks.length === 0 && <p>No exact wiki links in this note.</p>}</section></div></div>
+  </section>;
 }
 
 function CanvasGraph({ repository, canvas, entities, onError, onChanged }: { repository: ProjectRepository; canvas: StoryCanvas; entities: EntityOption[]; onError: (message: string) => void; onChanged: () => Promise<void> }) {
@@ -151,6 +199,7 @@ function CanvasGraph({ repository, canvas, entities, onError, onChanged }: { rep
 
 export function WorldbuildingWorkspace({ repository, snapshot, selectedStoryId, onRefresh, onNavigateDocument, onError }: { repository: ProjectRepository; snapshot: ProjectSnapshot; selectedStoryId?: string; onRefresh: () => Promise<void>; onNavigateDocument: (anchor: DocumentAnchor) => void; onError: (message: string) => void }) {
   const [selectedItemId, setSelectedItemId] = useState<string>();
+  const [creatingItem, setCreatingItem] = useState(false);
   const [editing, setEditing] = useState(false);
   const [search, setSearch] = useState('');
   const [searchResults, setSearchResults] = useState<WorldbuildingItem[]>(snapshot.worldbuildingItems);
@@ -164,12 +213,14 @@ export function WorldbuildingWorkspace({ repository, snapshot, selectedStoryId, 
   const [linkTargetId, setLinkTargetId] = useState('');
   const [unresolvedLabel, setUnresolvedLabel] = useState('');
   const [repairTargetId, setRepairTargetId] = useState('');
+  const [requestedNoteContext, setRequestedNoteContext] = useState<{ noteId: string; start: number }>();
+  const onNavigateNote = (noteId: string, start: number) => setRequestedNoteContext({ noteId, start });
   const selectedItem = snapshot.worldbuildingItems.find((item) => item.id === selectedItemId);
   const entities = useMemo(() => entityOptions(snapshot, selectedStoryId), [snapshot, selectedStoryId]);
   const activeCanvases = snapshot.canvases.filter((canvas) => !selectedStoryId || canvas.storyId === selectedStoryId);
   const activeCanvas = activeCanvases.find((canvas) => canvas.id === canvasId) ?? activeCanvases[0];
 
-  useEffect(() => { if (!selectedItemId || !snapshot.worldbuildingItems.some((item) => item.id === selectedItemId)) setSelectedItemId(snapshot.worldbuildingItems[0]?.id); }, [selectedItemId, snapshot.worldbuildingItems]);
+  useEffect(() => { if (!creatingItem && (!selectedItemId || !snapshot.worldbuildingItems.some((item) => item.id === selectedItemId))) setSelectedItemId(snapshot.worldbuildingItems[0]?.id); }, [creatingItem, selectedItemId, snapshot.worldbuildingItems]);
   useEffect(() => { if (!canvasId || !activeCanvases.some((canvas) => canvas.id === canvasId)) setCanvasId(activeCanvases[0]?.id); }, [activeCanvases, canvasId]);
   useEffect(() => { if (!linkSceneId) setLinkSceneId(snapshot.scenes[0]?.id ?? ''); }, [linkSceneId, snapshot.scenes]);
   useEffect(() => { let active = true; void repository.searchWorldbuilding(search).then((items) => { if (active) setSearchResults(items); }).catch((error) => onError(error instanceof Error ? error.message : String(error))); return () => { active = false; }; }, [onError, repository, search, snapshot.worldbuildingItems]);
@@ -178,8 +229,18 @@ export function WorldbuildingWorkspace({ repository, snapshot, selectedStoryId, 
   const saveItem = async (value: { kind: WorldbuildingItemKind; title: string; aliases: string[]; properties: WorldbuildingProperties; revision?: number }) => {
     try {
       const item = selectedItem && value.revision ? await repository.updateWorldbuildingItem(selectedItem.id, { title: value.title, aliases: value.aliases, properties: value.properties }, value.revision) : await repository.createWorldbuildingItem(value);
-      setSelectedItemId(item.id); setEditing(false); await onRefresh();
+      setCreatingItem(false); setSelectedItemId(item.id); setEditing(false); await onRefresh();
     } catch (error) { onError(error instanceof Error ? error.message : String(error)); }
+  };
+  const deleteSelectedItem = async () => {
+    if (!selectedItem || !window.confirm(`Remove ${selectedItem.title}? Referenced records are protected.`)) return;
+    try { await repository.deleteWorldbuildingItem(selectedItem.id, selectedItem.revision); await onRefresh(); }
+    catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.startsWith('Cannot delete') && window.confirm('Remove relationships and canvas placements? Markdown and document links will stay visibly unresolved for repair.')) {
+        try { await repository.deleteWorldbuildingItem(selectedItem.id, selectedItem.revision, 'remove-references'); await onRefresh(); } catch (retryError) { onError(retryError instanceof Error ? retryError.message : String(retryError)); }
+      } else onError(message);
+    }
   };
   const createRelationship = async () => { if (!sourceId || !targetId) return; try { await repository.createRelationship(sourceId, targetId, relationshipType); await onRefresh(); } catch (error) { onError(error instanceof Error ? error.message : String(error)); } };
   const createCanvas = async () => { if (!selectedStoryId) { onError('Choose a story before creating a scoped canvas.'); return; } try { const canvas = await repository.createCanvas(selectedStoryId, canvasTitle); setCanvasId(canvas.id); await onRefresh(); } catch (error) { onError(error instanceof Error ? error.message : String(error)); } };
@@ -189,13 +250,14 @@ export function WorldbuildingWorkspace({ repository, snapshot, selectedStoryId, 
   };
 
   return <main className="worldbuilding-workspace">
-    <header className="worldbuilding-head"><div><p className="eyebrow">OFFLINE WORLDBUILDING</p><h1>World, people, places, and their context.</h1><p>Stable IDs keep links intact when titles change. Weave never infers links from arbitrary prose.</p></div><button type="button" className="primary-button" onClick={() => { setSelectedItemId(undefined); setEditing(true); }}>+ New item</button></header>
+    <header className="worldbuilding-head"><div><p className="eyebrow">OFFLINE WORLDBUILDING</p><h1>World, people, places, and their context.</h1><p>Stable IDs keep links intact when titles change. Weave never infers links from arbitrary prose.</p></div><button type="button" className="primary-button" onClick={() => { setCreatingItem(true); setSelectedItemId(undefined); setEditing(true); }}>+ New item</button></header>
     <div className="worldbuilding-grid">
-      <aside className="world-catalog" aria-label="Worldbuilding catalog"><label>Search titles, aliases, terms, and links<input value={search} placeholder="Search locally" onChange={(event) => setSearch(event.target.value)} /></label><div className="catalog-list">{searchResults.map((item) => <button type="button" key={item.id} className={item.id === selectedItemId ? 'selected' : ''} onClick={() => { setSelectedItemId(item.id); setEditing(false); }}><span className={`kind-pill kind-${item.kind}`}>{item.kind}</span><strong>{item.title}</strong>{item.aliases.length > 0 && <small>{item.aliases.join(' · ')}</small>}</button>)}{searchResults.length === 0 && <p>No local matches.</p>}</div></aside>
-      <section className="world-detail" aria-live="polite">{editing ? <><h2>{selectedItem ? `Edit ${selectedItem.title}` : 'Create worldbuilding item'}</h2><ItemForm item={selectedItem} onSave={saveItem} onCancel={() => setEditing(false)} /></> : selectedItem ? <><div className="detail-title"><div><span className={`kind-pill kind-${selectedItem.kind}`}>{selectedItem.kind}</span><h2>{selectedItem.title}</h2></div><div><button type="button" className="secondary-button" onClick={() => setEditing(true)}>Edit</button><button type="button" className="text-button" onClick={() => { if (window.confirm(`Remove ${selectedItem.title}? Referenced records are protected.`)) void repository.deleteWorldbuildingItem(selectedItem.id, selectedItem.revision).then(onRefresh).catch((error) => onError(error instanceof Error ? error.message : String(error))); }}>Delete</button></div></div><p className="aliases"><strong>Aliases:</strong> {selectedItem.aliases.length ? selectedItem.aliases.join(', ') : 'None'}</p><dl>{Object.entries(selectedItem.properties).filter(([, value]) => value).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl><section className="link-panel"><h3>Outgoing links</h3>{snapshot.relationships.filter((relationship) => relationship.sourceId === selectedItem.id).map((relationship) => <p key={relationship.id}><strong>{relationship.type}</strong> → {titleFor(entities, relationship.targetId)} <button type="button" className="text-button" onClick={() => void repository.deleteRelationship(relationship.id).then(onRefresh)}>Remove</button></p>)}{!snapshot.relationships.some((relationship) => relationship.sourceId === selectedItem.id) && <p>No outgoing links.</p>}<h3>Backlinks</h3>{backlinks.map((backlink) => <p key={backlink.id}>{backlink.kind === 'relationship' ? <><strong>{backlink.type}</strong> from <button type="button" className="context-link" onClick={() => setSelectedItemId(backlink.sourceId)}>{backlink.sourceTitle}</button></> : <>Document link from <button type="button" className="context-link" onClick={() => onNavigateDocument(backlink.anchor)}>{backlink.sourceTitle}</button> <small>block context</small></>}</p>)}{backlinks.length === 0 && <p>No backlinks.</p>}</section></> : <p>Select a catalog item or create one.</p>}</section>
+      <aside className="world-catalog" aria-label="Worldbuilding catalog"><label>Search titles, aliases, terms, and links<input value={search} placeholder="Search locally" onChange={(event) => setSearch(event.target.value)} /></label><div className="catalog-list">{searchResults.map((item) => <button type="button" key={item.id} className={item.id === selectedItemId ? 'selected' : ''} onClick={() => { setCreatingItem(false); setSelectedItemId(item.id); setEditing(false); }}><span className={`kind-pill kind-${item.kind}`}>{item.kind}</span><strong>{item.title}</strong>{item.aliases.length > 0 && <small>{item.aliases.join(' · ')}</small>}</button>)}{searchResults.length === 0 && <p>No local matches.</p>}</div></aside>
+      <section className="world-detail" aria-live="polite">{editing ? <><h2>{selectedItem ? `Edit ${selectedItem.title}` : 'Create worldbuilding item'}</h2><ItemForm item={selectedItem} onSave={saveItem} onCancel={() => { setCreatingItem(false); setEditing(false); }} /></> : selectedItem ? <><div className="detail-title"><div><span className={`kind-pill kind-${selectedItem.kind}`}>{selectedItem.kind}</span><h2>{selectedItem.title}</h2></div><div><button type="button" className="secondary-button" onClick={() => { setCreatingItem(false); setEditing(true); }}>Edit</button><button type="button" className="text-button" onClick={() => void deleteSelectedItem()}>Delete</button></div></div><p className="aliases"><strong>Aliases:</strong> {selectedItem.aliases.length ? selectedItem.aliases.join(', ') : 'None'}</p><dl>{Object.entries(selectedItem.properties).filter(([, value]) => value).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl><section className="link-panel"><h3>Outgoing links</h3>{snapshot.relationships.filter((relationship) => relationship.sourceId === selectedItem.id).map((relationship) => <p key={relationship.id}><strong>{relationship.type}</strong> → {titleFor(entities, relationship.targetId)} <button type="button" className="text-button" onClick={() => void repository.deleteRelationship(relationship.id).then(onRefresh)}>Remove</button></p>)}{!snapshot.relationships.some((relationship) => relationship.sourceId === selectedItem.id) && <p>No outgoing links.</p>}<h3>Backlinks</h3>{backlinks.map((backlink) => <p key={backlink.id}>{backlink.kind === 'relationship' ? <><strong>{backlink.type}</strong> from <button type="button" className="context-link" onClick={() => setSelectedItemId(backlink.sourceId)}>{backlink.sourceTitle}</button></> : backlink.kind === 'document' ? <>Document link from <button type="button" className="context-link" onClick={() => onNavigateDocument(backlink.anchor)}>{backlink.sourceTitle}</button> <small>block context</small></> : <>Markdown link from <button type="button" className="context-link" onClick={() => onNavigateNote(backlink.noteId, backlink.start)}>{backlink.sourceTitle}</button> <small>wiki-link context</small></>}</p>)}{backlinks.length === 0 && <p>No backlinks.</p>}</section></> : <p>Select a catalog item or create one.</p>}</section>
     </div>
     <section className="relationship-composer" aria-labelledby="relationship-composer-title"><h2 id="relationship-composer-title">Create typed relationship</h2><label>Source<select value={sourceId} onChange={(event) => setSourceId(event.target.value)}><option value="">Choose source</option>{entities.map((entity) => <option key={entity.id} value={entity.id}>{entity.kind} · {entity.label}</option>)}</select></label><label>Type<select value={relationshipType} onChange={(event) => setRelationshipType(event.target.value as RelationshipType)}>{RELATIONSHIP_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}</select></label><label>Target<select value={targetId} onChange={(event) => setTargetId(event.target.value)}><option value="">Choose target</option>{entities.filter((entity) => entity.id !== sourceId).map((entity) => <option key={entity.id} value={entity.id}>{entity.kind} · {entity.label}</option>)}</select></label><button type="button" className="primary-button" onClick={() => void createRelationship()} disabled={!sourceId || !targetId}>Link items</button></section>
     <section className="document-link-panel" aria-labelledby="document-link-title"><div><p className="eyebrow">EXPLICIT DOCUMENT LINKS</p><h2 id="document-link-title">Anchored, not parsed</h2><p>Create an explicit stable-ID anchor at a scene’s first block. Empty target labels remain visible until repaired.</p></div><label>Scene<select value={linkSceneId} onChange={(event) => setLinkSceneId(event.target.value)}>{snapshot.scenes.map((scene) => <option key={scene.id} value={scene.id}>{scene.title}</option>)}</select></label><label>Target<select value={linkTargetId} onChange={(event) => setLinkTargetId(event.target.value)}><option value="">Unresolved link</option>{snapshot.worldbuildingItems.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>{!linkTargetId && <label>Visible repair label<input value={unresolvedLabel} placeholder="Unresolved name" onChange={(event) => setUnresolvedLabel(event.target.value)} /></label>}<button type="button" className="secondary-button" onClick={() => void createDocumentLink()} disabled={!linkSceneId || (!linkTargetId && !unresolvedLabel.trim())}>Add document link</button><div className="document-link-list">{snapshot.documentLinks.map((link) => <p key={link.id}>{link.targetId ? <>Linked to {titleFor(entities, link.targetId)}</> : <><strong>Unresolved:</strong> {link.unresolvedLabel} <select aria-label={`Repair ${link.unresolvedLabel}`} value={repairTargetId} onChange={(event) => setRepairTargetId(event.target.value)}><option value="">Choose target</option>{snapshot.worldbuildingItems.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select><button type="button" className="text-button" disabled={!repairTargetId} onClick={() => void repository.repairDocumentLink(link.id, repairTargetId).then(async () => { setRepairTargetId(''); await onRefresh(); })}>Repair</button></>} <small>document anchor</small></p>)}{snapshot.documentLinks.length === 0 && <p>No document links yet.</p>}</div></section>
+    <MarkdownNotes repository={repository} snapshot={snapshot} entities={entities} onChanged={onRefresh} onError={onError} requestedNoteId={requestedNoteContext?.noteId} requestedOffset={requestedNoteContext?.start} />
     <section className="canvas-section" aria-labelledby="canvas-section-title"><div className="canvas-section-head"><div><p className="eyebrow">STORY-SCOPED REACT FLOW</p><h2 id="canvas-section-title">Relationship canvas</h2></div><label>Canvas title<input value={canvasTitle} onChange={(event) => setCanvasTitle(event.target.value)} /></label><button type="button" className="primary-button" onClick={() => void createCanvas()} disabled={!selectedStoryId}>New canvas</button>{activeCanvases.length > 0 && <label>Open canvas<select value={activeCanvas?.id ?? ''} onChange={(event) => setCanvasId(event.target.value)}>{activeCanvases.map((canvas) => <option key={canvas.id} value={canvas.id}>{canvas.title}</option>)}</select></label>}</div>{activeCanvas ? <CanvasGraph repository={repository} canvas={activeCanvas} entities={entities} onError={onError} onChanged={onRefresh} /> : <p>Choose a story in Manuscript, then create a scoped canvas.</p>}</section>
   </main>;
 }

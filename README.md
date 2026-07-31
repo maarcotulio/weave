@@ -43,10 +43,12 @@ The first launch can create or open a project directory. The starter project con
 
 ## Worldbuilding and story graph
 
+- The left navigation has separate **Manuscript** and **Worldbuilding** workspaces. Manuscript behavior remains the revisioned writing slice; Worldbuilding contains its own local item, note, relationship, and canvas tools.
 - Worlds, places/cities, characters, and terms have typed local properties and aliases. Relationships use stable IDs, so renaming updates every projection without breaking links.
-- Outgoing links and backlinks combine typed domain relationships with explicit document anchors. Weave does not infer links by parsing prose. Deleting a referenced item is refused by default; the explicit **remove references** path removes relationships/canvas placements and leaves document links visibly unresolved for repair.
-- Search is entirely local and covers titles, aliases, typed properties/terms, and relationship context.
-- Each story can have a React Flow graph. `@xyflow/react` is pinned to **12.11.2** in `package.json`/`package-lock.json`; it is the only canvas dependency. Run `npm audit --omit=dev` when updating it (the production dependency audit was clean at this pin).
+- Users can create any number of persisted Markdown notes. Only exact `[[Target]]` and `[[Target|label]]` tokens are indexed—normal prose is never heuristically parsed. Targets resolve deterministically against exactly one title/alias (or are visibly unresolved and repairable); resolved note links and backlinks retain stable IDs across a rename.
+- Outgoing links and backlinks combine typed domain relationships, Markdown wiki links, and explicit document anchors. Deleting a referenced item is refused by default; the explicit **remove references** path removes relationships/canvas placements and leaves document or Markdown links visible for repair.
+- Search is entirely local and covers titles, aliases, typed properties/terms, relationship context, note titles, note Markdown, and explicit wiki-link text.
+- React Flow canvases are separately user-created and persisted per story; no canvas is created implicitly. `@xyflow/react` is pinned to **12.11.2** in `package.json`/`package-lock.json`; it is the only canvas dependency. Run `npm audit --omit=dev` when updating it (the production dependency audit was clean at this pin).
 - Canvas node positions and viewport are persisted separately from entities. Nodes project current domain labels; relationship edges reference validated relationship IDs. A keyboard-accessible outline lists every graph node and edge, while the graph supports focus, Delete placement removal, and Home-to-fit.
 
 ## Future roadmap

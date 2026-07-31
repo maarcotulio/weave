@@ -140,9 +140,35 @@ export interface DocumentLink {
   createdAt: string;
 }
 
+/** A user-authored Markdown note; its link index is derived only from [[...]] tokens. */
+export interface MarkdownNote {
+  id: string;
+  projectId: string;
+  title: string;
+  markdown: string;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NoteLink {
+  id: string;
+  noteId: string;
+  /** Stable target ID after deterministic exact title/alias resolution or repair. */
+  targetId?: string;
+  targetText: string;
+  label?: string;
+  start: number;
+  end: number;
+  /** Identifies repeated identical wiki tokens when a note is saved again. */
+  occurrence: number;
+  createdAt: string;
+}
+
 export type Backlink =
   | { kind: 'relationship'; id: string; sourceId: string; sourceTitle: string; type: RelationshipType }
-  | { kind: 'document'; id: string; sourceId: string; sourceTitle: string; anchor: DocumentAnchor };
+  | { kind: 'document'; id: string; sourceId: string; sourceTitle: string; anchor: DocumentAnchor }
+  | { kind: 'note'; id: string; sourceId: string; sourceTitle: string; noteId: string; start: number; end: number; label?: string };
 
 export interface CanvasViewport { x: number; y: number; zoom: number; }
 export interface CanvasPosition { x: number; y: number; }
@@ -174,7 +200,7 @@ export interface CanvasEdge {
 }
 
 export interface CanvasProjectionNode extends CanvasNode {
-  entityKind: WorldbuildingItemKind | 'chapter' | 'scene';
+  entityKind: WorldbuildingItemKind | 'chapter' | 'scene' | 'note';
   label: string;
 }
 
@@ -259,6 +285,8 @@ export interface ProjectSnapshot {
   worldbuildingItems: WorldbuildingItem[];
   relationships: DomainRelationship[];
   documentLinks: DocumentLink[];
+  markdownNotes: MarkdownNote[];
+  noteLinks: NoteLink[];
   canvases: StoryCanvas[];
   styleProfile: EditorStyleProfile;
   writingStats: WritingStats;

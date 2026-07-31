@@ -14,7 +14,7 @@ const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as { Data
 import { InMemoryProjectRepository } from '../domain/repository';
 import { now } from '../domain/document';
 import { DEFAULT_EDITOR_STYLE, type EditorStyleProfile, type WritingGoals } from '../domain/types';
-import type { BackupRecord, OperationStatus, Project, StructuredDocument, WorldbuildingItem, WorldbuildingItemKind, WorldbuildingProperties, RelationshipType, DomainRelationship, DocumentAnchor, DocumentLink, StoryCanvas, CanvasPosition, CanvasViewport, CanvasNode, CanvasEdge } from '../domain/types';
+import type { BackupRecord, OperationStatus, Project, StructuredDocument, WorldbuildingItem, WorldbuildingItemKind, WorldbuildingProperties, RelationshipType, DomainRelationship, DocumentAnchor, DocumentLink, MarkdownNote, NoteLink, StoryCanvas, CanvasPosition, CanvasViewport, CanvasNode, CanvasEdge } from '../domain/types';
 import type { SaveDocumentResult, SplitResult, DocumentHead } from '../domain/repository';
 import type { Chapter, ContinuousDraft, IntegrityReport, Revision, Scene, SceneSet, Story } from '../domain/types';
 
@@ -30,6 +30,8 @@ interface PersistedState {
   worldbuildingItems: WorldbuildingItem[];
   relationships: DomainRelationship[];
   documentLinks: DocumentLink[];
+  markdownNotes: MarkdownNote[];
+  noteLinks: NoteLink[];
   canvases: StoryCanvas[];
   canvasNodes: CanvasNode[];
   canvasEdges: CanvasEdge[];
@@ -83,6 +85,10 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
   async deleteRelationship(relationshipId: string): Promise<void> { await super.deleteRelationship(relationshipId); this.persist(); }
   async createDocumentLink(anchor: DocumentAnchor, targetId?: string, unresolvedLabel?: string): Promise<DocumentLink> { const value = await super.createDocumentLink(anchor, targetId, unresolvedLabel); this.persist(); return value; }
   async repairDocumentLink(linkId: string, targetId: string): Promise<DocumentLink> { const value = await super.repairDocumentLink(linkId, targetId); this.persist(); return value; }
+  async createMarkdownNote(title: string, markdown?: string): Promise<MarkdownNote> { const value = await super.createMarkdownNote(title, markdown); this.persist(); return value; }
+  async updateMarkdownNote(noteId: string, input: { title: string; markdown: string }, expectedRevision: number): Promise<MarkdownNote> { try { const value = await super.updateMarkdownNote(noteId, input, expectedRevision); this.persist(); return value; } catch (error) { this.persist(); throw error; } }
+  async deleteMarkdownNote(noteId: string, expectedRevision: number, mode?: 'reject' | 'remove-references'): Promise<void> { try { await super.deleteMarkdownNote(noteId, expectedRevision, mode); this.persist(); } catch (error) { this.persist(); throw error; } }
+  async repairNoteLink(linkId: string, targetId: string): Promise<NoteLink> { const value = await super.repairNoteLink(linkId, targetId); this.persist(); return value; }
   async createCanvas(storyId: string, title: string): Promise<StoryCanvas> { const value = await super.createCanvas(storyId, title); this.persist(); return value; }
   async addCanvasNode(canvasId: string, entityId: string, position: CanvasPosition, expectedRevision: number): Promise<CanvasNode> { try { const value = await super.addCanvasNode(canvasId, entityId, position, expectedRevision); this.persist(); return value; } catch (error) { this.persist(); throw error; } }
   async removeCanvasNode(canvasId: string, nodeId: string, expectedRevision: number): Promise<void> { try { await super.removeCanvasNode(canvasId, nodeId, expectedRevision); this.persist(); } catch (error) { this.persist(); throw error; } }
@@ -147,7 +153,21 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
   async recoverFromBackup(backupId: string): Promise<OperationStatus> {
     const backup = this.database.prepare('SELECT state_json FROM backups WHERE id = ?').get(backupId) as { state_json: string } | undefined;
     if (!backup) throw new Error(`Unknown backup ${backupId}`);
-    this.state = JSON.parse(backup.state_json) as any;
+    const restored = JSON.parse(backup.state_json) as any;
+    this.state = {
+      ...restored,
+      worldbuildingItems: restored.worldbuildingItems ?? [],
+      relationships: restored.relationships ?? [],
+      documentLinks: restored.documentLinks ?? [],
+      markdownNotes: restored.markdownNotes ?? [],
+      noteLinks: restored.noteLinks ?? [],
+      canvases: restored.canvases ?? [],
+      canvasNodes: restored.canvasNodes ?? [],
+      canvasEdges: restored.canvasEdges ?? [],
+      styleProfile: { ...DEFAULT_EDITOR_STYLE, ...(restored.styleProfile ?? {}) },
+      writingGoals: { dailyTarget: 500, dailyWordCounts: {}, ...(restored.writingGoals ?? {}) }
+    };
+    if (this.state.project && this.state.project.schemaVersion < 3) this.state.project.schemaVersion = 3;
     this.state.status = { state: 'recovered', message: 'Recovered backup; verify the project before editing', at: now() };
     this.persist();
     return this.state.status;
@@ -197,6 +217,10 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
     if (!worldbuildingMigration) {
       this.database.exec('BEGIN; INSERT INTO schema_migrations(version, applied_at) VALUES (2, datetime(\'now\')); COMMIT;');
     }
+    const markdownNotesMigration = this.database.prepare('SELECT version FROM schema_migrations WHERE version = 3').get();
+    if (!markdownNotesMigration) {
+      this.database.exec('BEGIN; INSERT INTO schema_migrations(version, applied_at) VALUES (3, datetime(\'now\')); COMMIT;');
+    }
   }
 
   private loadState(): void {
@@ -208,13 +232,15 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
       worldbuildingItems: value.worldbuildingItems ?? [],
       relationships: value.relationships ?? [],
       documentLinks: value.documentLinks ?? [],
+      markdownNotes: value.markdownNotes ?? [],
+      noteLinks: value.noteLinks ?? [],
       canvases: value.canvases ?? [],
       canvasNodes: value.canvasNodes ?? [],
       canvasEdges: value.canvasEdges ?? [],
       styleProfile: { ...DEFAULT_EDITOR_STYLE, ...(value.styleProfile ?? {}) },
       writingGoals: { dailyTarget: 500, dailyWordCounts: {}, ...(value.writingGoals ?? {}) }
     };
-    if (this.state.project && this.state.project.schemaVersion < 2) this.state.project.schemaVersion = 2;
+    if (this.state.project && this.state.project.schemaVersion < 3) this.state.project.schemaVersion = 3;
   }
 
   private persist(): void {

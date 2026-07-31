@@ -23,6 +23,8 @@ import type {
   DomainRelationship,
   DocumentAnchor,
   DocumentLink,
+  MarkdownNote,
+  NoteLink,
   Backlink,
   StoryCanvas,
   CanvasPosition,
@@ -60,6 +62,13 @@ export class TauriProjectRepository implements ProjectRepository {
   createDocumentLink(anchor: DocumentAnchor, targetId?: string, unresolvedLabel?: string): Promise<DocumentLink> { return command('create_document_link', { anchor, targetId, unresolvedLabel }); }
   repairDocumentLink(linkId: string, targetId: string): Promise<DocumentLink> { return command('repair_document_link', { linkId, targetId }); }
   listDocumentLinks(documentId?: string): Promise<DocumentLink[]> { return command('list_document_links', { documentId }); }
+  createMarkdownNote(title: string, markdown?: string): Promise<MarkdownNote> { return command('create_markdown_note', { title, markdown }); }
+  updateMarkdownNote(noteId: string, input: { title: string; markdown: string }, expectedRevision: number): Promise<MarkdownNote> { return command('update_markdown_note', { noteId, input, expectedRevision }); }
+  deleteMarkdownNote(noteId: string, expectedRevision: number, mode?: 'reject' | 'remove-references'): Promise<void> { return command('delete_markdown_note', { noteId, expectedRevision, mode }); }
+  listMarkdownNotes(): Promise<MarkdownNote[]> { return command('list_markdown_notes'); }
+  searchMarkdownNotes(query: string): Promise<MarkdownNote[]> { return command('search_markdown_notes', { query }); }
+  listNoteLinks(noteId?: string): Promise<NoteLink[]> { return command('list_note_links', { noteId }); }
+  repairNoteLink(linkId: string, targetId: string): Promise<NoteLink> { return command('repair_note_link', { linkId, targetId }); }
   createCanvas(storyId: string, title: string): Promise<StoryCanvas> { return command('create_canvas', { storyId, title }); }
   listCanvases(storyId?: string): Promise<StoryCanvas[]> { return command('list_canvases', { storyId }); }
   getCanvasProjection(canvasId: string): Promise<CanvasProjection> { return command('canvas_projection', { canvasId }); }

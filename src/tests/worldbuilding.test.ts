@@ -41,6 +41,7 @@ describe('worldbuilding links and deletion rules', () => {
     await repository.createRelationship(character.id, place.id, 'located-in');
     const head = await repository.getDocument(scene.documentId);
     await repository.createDocumentLink({ documentId: scene.documentId, blockId: head.document.blocks[0].id, start: 0, end: 0 }, character.id);
+    const note = await repository.createMarkdownNote('Reference', '[[Aster]] is still referenced.');
     await expect(repository.deleteWorldbuildingItem(character.id, character.revision)).rejects.toThrow('Cannot delete Aster');
     await repository.deleteWorldbuildingItem(character.id, character.revision, 'remove-references');
     expect(await repository.listRelationships(character.id)).toEqual([]);
@@ -48,6 +49,7 @@ describe('worldbuilding links and deletion rules', () => {
     const [unresolved] = await repository.listDocumentLinks(scene.documentId);
     expect(unresolved.targetId).toBeUndefined();
     expect(unresolved.unresolvedLabel).toBe('Aster');
+    expect((await repository.listNoteLinks(note.id))[0].targetId).toBeUndefined();
   });
 
   it('rebuilds backlinks from persisted relationship and explicit anchor records rather than titles', async () => {
@@ -66,6 +68,34 @@ describe('worldbuilding links and deletion rules', () => {
     const { repository, character } = await fixture();
     await repository.updateWorldbuildingItem(character.id, { title: 'Aster', aliases: [], properties: { role: 'Courier', pronouns: 'they/them', summary: 'Updated' } }, character.revision);
     await expect(repository.updateWorldbuildingItem(character.id, { title: 'Stale Aster', aliases: [], properties: { role: 'Courier' } }, character.revision)).rejects.toBeInstanceOf(EntityRevisionConflictError);
+  });
+
+  it('persists multiple deterministic Markdown notes and rebuilds only exact wiki links into stable-ID backlinks', async () => {
+    const { repository, character, place } = await fixture();
+    const note = await repository.createMarkdownNote('Arrival notes', 'Plain Aster prose stays plain. Meet [[Aster]] at [[Lumen|the city]].');
+    const second = await repository.createMarkdownNote('Loose end', 'Repair [[Unknown target]] later.');
+    expect((await repository.listMarkdownNotes()).map((item) => item.id)).toEqual(expect.arrayContaining([note.id, second.id]));
+    expect(await repository.listNoteLinks(note.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ targetText: 'Aster', targetId: character.id }),
+      expect.objectContaining({ targetText: 'Lumen', label: 'the city', targetId: place.id })
+    ]));
+    expect(await repository.listNoteLinks(note.id)).toHaveLength(2);
+    const unresolved = (await repository.listNoteLinks(second.id))[0];
+    expect(unresolved.targetId).toBeUndefined();
+    await repository.repairNoteLink(unresolved.id, place.id);
+    const repaired = await repository.updateMarkdownNote(second.id, { title: 'Loose end', markdown: second.markdown }, second.revision);
+    expect((await repository.listNoteLinks(repaired.id))[0].targetId).toBe(place.id);
+    expect(await repository.listBacklinks(character.id)).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'note', sourceId: note.id, sourceTitle: 'Arrival notes' })]));
+  });
+
+  it('preserves Markdown note link targets across a rename and stale note save', async () => {
+    const { repository, character } = await fixture();
+    const note = await repository.createMarkdownNote('Courier', '[[Aster]] arrives.');
+    const renamed = await repository.updateWorldbuildingItem(character.id, { title: 'Aster Vale', aliases: [], properties: { role: 'Courier', pronouns: 'they/them', summary: 'Carries a sealed letter' } }, character.revision);
+    expect(renamed.aliases).toContain('Aster');
+    const saved = await repository.updateMarkdownNote(note.id, { title: 'Courier', markdown: note.markdown }, note.revision);
+    expect((await repository.listNoteLinks(saved.id))[0].targetId).toBe(character.id);
+    await expect(repository.updateMarkdownNote(note.id, { title: 'Stale', markdown: '[[Aster]]' }, note.revision)).rejects.toBeInstanceOf(EntityRevisionConflictError);
   });
 });
 
@@ -118,6 +148,8 @@ describe('offline reload and accessible fallback', () => {
     const scene = await repository.createScene(chapter.id, 'Scene', documentFromText('Context'));
     const character = await repository.createWorldbuildingItem({ kind: 'character', title: 'Nova', properties: { role: 'Lead' } });
     const relation = await repository.createRelationship(character.id, scene.id, 'appears-in');
+    const firstNote = await repository.createMarkdownNote('Offline note', '[[Nova]] appears in the scene.');
+    await repository.createMarkdownNote('Second offline note', 'A separate persisted Markdown note.');
     const document = await repository.getDocument(scene.documentId);
     await repository.createDocumentLink({ documentId: scene.documentId, blockId: document.document.blocks[0].id, start: 0, end: 0 }, character.id);
     const canvas = await repository.createCanvas(story.id, 'Offline map');
@@ -126,11 +158,16 @@ describe('offline reload and accessible fallback', () => {
     const sceneNode = await repository.addCanvasNode(canvas.id, scene.id, { x: 99, y: 42 }, projection.canvas.revision);
     const next = await repository.getCanvasProjection(canvas.id);
     await repository.connectCanvasNodes(canvas.id, characterNode.id, sceneNode.id, relation.id, next.canvas.revision);
+    const backup = await repository.createBackup();
+    await repository.updateMarkdownNote(firstNote.id, { title: 'Changed after backup', markdown: 'No longer linked.' }, firstNote.revision);
+    await repository.recoverFromBackup(backup.id);
     repository.close();
 
     const reopened = new SQLiteProjectRepository(directory);
     expect((await reopened.searchWorldbuilding('nova')).map((item) => item.title)).toEqual(['Nova']);
-    expect(await reopened.listBacklinks(character.id)).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'document' })]));
+    expect((await reopened.listMarkdownNotes()).map((note) => note.title)).toEqual(['Offline note', 'Second offline note']);
+    expect(await reopened.listNoteLinks(firstNote.id)).toEqual([expect.objectContaining({ targetId: character.id, targetText: 'Nova' })]);
+    expect(await reopened.listBacklinks(character.id)).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'document' }), expect.objectContaining({ kind: 'note', sourceId: firstNote.id })]));
     expect((await reopened.getCanvasProjection(canvas.id)).nodes).toEqual(expect.arrayContaining([expect.objectContaining({ entityId: character.id, position: { x: 41, y: 42 } })]));
     expect((await reopened.getCanvasProjection(canvas.id)).edges).toHaveLength(1);
     expect((await reopened.integrityCheck()).ok).toBe(true);
@@ -145,5 +182,10 @@ describe('offline reload and accessible fallback', () => {
     expect(component).toContain("event.key === 'Home'");
     expect(component).toContain('Canvas outline');
     expect(component).toContain('Keyboard-accessible list of every graph node and relationship.');
+    expect(component).toContain('[[Target|label]]');
+    expect(component).toContain('Markdown note content');
+    const app = readFileSync(join(process.cwd(), 'src/app/App.tsx'), 'utf8');
+    expect(app).toContain('Primary workspaces');
+    expect(app).toContain('Worldbuilding');
   });
 });
