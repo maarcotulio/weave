@@ -116,12 +116,16 @@ describe('offline persistence and accessible workspace', () => {
     expect(app).toContain('Primary workspaces');
     expect(app).toContain('worldbuilding-sidebar-group');
     expect(app).toContain('worldbuildingTabs');
-    expect(app).toContain('worldbuilding-create-actions');
-    expect(app).toContain('Create new note</button><button type="button" onClick={createWorldbuildingCanvas}>Create new canva</button>');
+    expect(app).toContain("import { Plus } from 'lucide-react'");
+    expect(app).toContain('worldbuilding-sidebar-heading');
+    expect(app).toContain('className="worldbuilding-create-icon" aria-label="Create new note" title="Create new note" onClick={createWorldbuildingNote}><Plus');
+    expect(app).toContain('className="worldbuilding-create-icon" aria-label="Create new canva" title="Create new canva" onClick={createWorldbuildingCanvas}><Plus');
+    expect(readFileSync(join(process.cwd(), 'package.json'), 'utf8')).toContain('"lucide-react"');
     expect(app).toContain('onReturnToManuscript={() => setWorkspaceMode(\'writing\')}');
     const styles = readFileSync(join(process.cwd(), 'src/app/styles.css'), 'utf8');
     expect(styles).toContain('.worldbuilding-workspace { display: flex;');
     expect(styles).toContain('.worldbuilding-main { display: flex; flex: 1; flex-direction: column;');
     expect(styles).toContain('.worldbuilding-empty { display: flex; flex: 1; min-height: 0; width: 100%; flex-direction: column; align-items: center; justify-content: center;');
+    expect(styles).toContain('.worldbuilding-create-icon { display: grid; place-items: center;');
   });
 });
