@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{Local, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::{Path, PathBuf}, sync::Mutex};
@@ -51,12 +51,24 @@ struct BackupRecord { id: String, path: String, created_at: String, integrity: S
 struct OperationStatus { state: String, message: String, at: String }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct EditorStyleProfile { font_family: String, font_size_pt: f64, line_spacing: String }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WritingGoals { daily_target: i64, daily_word_counts: std::collections::HashMap<String, i64> }
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WritingStats { date: String, daily_target: i64, daily_words: i64, project_words: i64 }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Store {
-    project: Option<Project>, stories: Vec<Story>, chapters: Vec<Chapter>, scene_sets: Vec<SceneSet>, scenes: Vec<Scene>, documents: Vec<DocumentRecord>, drafts: Vec<ContinuousDraft>, backups: Vec<BackupRecord>, status: OperationStatus,
+    project: Option<Project>, stories: Vec<Story>, chapters: Vec<Chapter>, scene_sets: Vec<SceneSet>, scenes: Vec<Scene>, documents: Vec<DocumentRecord>, drafts: Vec<ContinuousDraft>, backups: Vec<BackupRecord>,
+    #[serde(default = "default_style_profile")] style_profile: EditorStyleProfile,
+    #[serde(default = "default_writing_goals")] writing_goals: WritingGoals,
+    status: OperationStatus,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ProjectSnapshot { project: Project, stories: Vec<Story>, chapters: Vec<Chapter>, scene_sets: Vec<SceneSet>, scenes: Vec<Scene>, continuous_drafts: Vec<ContinuousDraft>, status: OperationStatus }
+struct ProjectSnapshot { project: Project, stories: Vec<Story>, chapters: Vec<Chapter>, scene_sets: Vec<SceneSet>, scenes: Vec<Scene>, continuous_drafts: Vec<ContinuousDraft>, style_profile: EditorStyleProfile, writing_stats: WritingStats, status: OperationStatus }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DocumentHead { document_id: String, document: Document, revision: i64, revision_id: String }
@@ -70,8 +82,10 @@ struct IntegrityReport { ok: bool, message: String, checked_at: String }
 #[serde(rename_all = "camelCase")]
 struct SplitResult { scene_set: SceneSet, scenes: Vec<Scene>, source_revision_id: String }
 
+fn default_style_profile() -> EditorStyleProfile { EditorStyleProfile { font_family: "Times New Roman".into(), font_size_pt: 12.0, line_spacing: "double".into() } }
+fn default_writing_goals() -> WritingGoals { WritingGoals { daily_target: 500, daily_word_counts: std::collections::HashMap::new() } }
 impl Default for OperationStatus { fn default() -> Self { Self { state: "idle".into(), message: "Ready".into(), at: timestamp() } } }
-impl Default for Store { fn default() -> Self { Self { project: None, stories: vec![], chapters: vec![], scene_sets: vec![], scenes: vec![], documents: vec![], drafts: vec![], backups: vec![], status: OperationStatus::default() } } }
+impl Default for Store { fn default() -> Self { Self { project: None, stories: vec![], chapters: vec![], scene_sets: vec![], scenes: vec![], documents: vec![], drafts: vec![], backups: vec![], style_profile: default_style_profile(), writing_goals: default_writing_goals(), status: OperationStatus::default() } } }
 
 struct AppState { root: Option<PathBuf>, store: Store }
 impl Default for AppState { fn default() -> Self { Self { root: None, store: Store::default() } } }
@@ -114,6 +128,17 @@ fn empty_document() -> Document { Document { format_version: DOCUMENT_FORMAT_VER
 fn validate_document(value: &Document) -> Result<(), String> { if value.format_version != DOCUMENT_FORMAT_VERSION { return Err("Unsupported document format".into()); } for block in &value.blocks { if !["paragraph", "heading", "scene-break"].contains(&block.kind.as_str()) { return Err("Unsupported block kind".into()); } } Ok(()) }
 fn block_text(block: &DocumentBlock) -> String { block.runs.iter().map(|run| run.text.as_str()).collect() }
 fn explicit_marker(block: &DocumentBlock) -> bool { block.kind == "paragraph" && ["***", "Nova cena"].contains(&block_text(block).trim()) }
+fn word_count(value: &str) -> i64 { let mut count = 0; let mut in_word = false; for character in value.chars() { if character.is_alphanumeric() { if !in_word { count += 1; in_word = true; } } else if character != '\'' && character != '’' { in_word = false; } } count }
+fn document_word_count(document: &Document) -> i64 { document.blocks.iter().filter(|block| block.kind != "scene-break" && !explicit_marker(block)).map(|block| word_count(&block_text(block))).sum() }
+fn project_word_count(store: &Store) -> i64 {
+    store.chapters.iter().map(|chapter| {
+        let draft = store.drafts.iter().filter(|draft| draft.chapter_id == chapter.id && draft.status == "open").max_by(|left, right| left.created_at.cmp(&right.created_at));
+        if let Some(draft) = draft { return document_record(store, &draft.document_id).ok().and_then(|record| record.revisions.last()).map(|revision| document_word_count(&revision.document)).unwrap_or(0); }
+        store.scenes.iter().filter(|scene| scene.scene_set_id == chapter.active_scene_set_id).filter_map(|scene| document_record(store, &scene.document_id).ok()).filter_map(|record| record.revisions.last()).map(|revision| document_word_count(&revision.document)).sum()
+    }).sum()
+}
+fn local_date() -> String { Local::now().format("%Y-%m-%d").to_string() }
+fn make_writing_stats(store: &Store) -> WritingStats { let date = local_date(); WritingStats { date: date.clone(), daily_target: store.writing_goals.daily_target, daily_words: *store.writing_goals.daily_word_counts.get(&date).unwrap_or(&0), project_words: project_word_count(store) } }
 fn add_document(store: &mut Store, value: Document, reason: &str) -> Result<DocumentRecord, String> { validate_document(&value)?; let record_id = id("document"); let revision = Revision { id: id("revision"), document_id: record_id.clone(), number: 1, document: value, created_at: timestamp(), reason: reason.into() }; let record = DocumentRecord { id: record_id, head_revision: 1, revisions: vec![revision] }; store.documents.push(record.clone()); Ok(record) }
 fn active_scenes(store: &Store, chapter_id: &str, set_id: &str) -> Vec<Scene> { let mut scenes: Vec<Scene> = store.scenes.iter().filter(|scene| scene.scene_set_id == set_id && store.chapters.iter().any(|chapter| chapter.id == chapter_id)).cloned().collect(); scenes.sort_by_key(|scene| scene.position); scenes }
 fn compose(store: &Store, chapter_id: &str) -> Result<Document, String> { let current = chapter(store, chapter_id)?; let scenes = active_scenes(store, chapter_id, &current.active_scene_set_id); let mut blocks = vec![]; for (index, scene) in scenes.iter().enumerate() { if index > 0 { blocks.push(DocumentBlock { id: id("scene-break"), kind: "scene-break".into(), heading_level: None, alignment: None, runs: vec![TextRun { text: String::new(), marks: vec![] }] }); } let record = document_record(store, &scene.document_id)?; let revision = record.revisions.last().ok_or_else(|| "Document has no revision".to_string())?; blocks.extend(revision.document.blocks.clone()); } Ok(Document { format_version: DOCUMENT_FORMAT_VERSION, blocks }) }
@@ -149,7 +174,7 @@ fn get_document(document_id: String, app: State<'_, Mutex<AppState>>) -> Result<
 #[tauri::command]
 fn get_revision(revision_id: String, app: State<'_, Mutex<AppState>>) -> Result<Revision, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; state.store.documents.iter().flat_map(|record| record.revisions.iter()).find(|item| item.id == revision_id).cloned().ok_or_else(|| "Unknown revision".into()) }
 #[tauri::command]
-fn save_document(document_id: String, document: Document, expected_revision: i64, app: State<'_, Mutex<AppState>>) -> Result<SaveResult, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; status(&mut state, "saving", "Saving revision…"); validate_document(&document)?; let current_revision = document_record(&state.store, &document_id)?.head_revision; if current_revision != expected_revision { status(&mut state, "revision-conflict", "Save stopped: this document changed elsewhere"); state.persist()?; return Err(format!("Revision conflict: expected {expected_revision}, current {current_revision}")); } let (revision, head_revision) = { let record = document_mut(&mut state.store, &document_id)?; record.head_revision += 1; let head_revision = record.head_revision; let revision = Revision { id: id("revision"), document_id, number: head_revision, document, created_at: timestamp(), reason: "edit".into() }; record.revisions.push(revision.clone()); (revision, head_revision) }; status(&mut state, "saved", &format!("Saved revision {head_revision}")); state.persist()?; Ok(SaveResult { revision, status: state.store.status.clone() }) }
+fn save_document(document_id: String, document: Document, expected_revision: i64, app: State<'_, Mutex<AppState>>) -> Result<SaveResult, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; status(&mut state, "saving", "Saving revision…"); validate_document(&document)?; let current_revision = document_record(&state.store, &document_id)?.head_revision; if current_revision != expected_revision { status(&mut state, "revision-conflict", "Save stopped: this document changed elsewhere"); state.persist()?; return Err(format!("Revision conflict: expected {expected_revision}, current {current_revision}")); } let project_words_before = project_word_count(&state.store); let (revision, head_revision) = { let record = document_mut(&mut state.store, &document_id)?; record.head_revision += 1; let head_revision = record.head_revision; let revision = Revision { id: id("revision"), document_id, number: head_revision, document, created_at: timestamp(), reason: "edit".into() }; record.revisions.push(revision.clone()); (revision, head_revision) }; let delta = project_word_count(&state.store) - project_words_before; if delta != 0 { let date = local_date(); let value = state.store.writing_goals.daily_word_counts.entry(date).or_insert(0); *value = (*value + delta).max(0); } status(&mut state, "saved", &format!("Saved revision {head_revision}")); state.persist()?; Ok(SaveResult { revision, status: state.store.status.clone() }) }
 
 #[tauri::command]
 fn enter_continuous_draft(chapter_id: String, app: State<'_, Mutex<AppState>>) -> Result<ContinuousDraft, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let chapter_value = chapter(&state.store, &chapter_id)?.clone(); let composed = compose(&state.store, &chapter_id)?; let record = add_document(&mut state.store, composed, "continuous-draft")?; let source = record.revisions.last().unwrap().clone(); let value = ContinuousDraft { id: id("draft"), chapter_id, document_id: record.id, base_scene_set_id: chapter_value.active_scene_set_id, source_revision_id: source.id, status: "open".into(), created_at: timestamp() }; state.store.drafts.push(value.clone()); status(&mut state, "saved", "Continuous draft opened from a scene snapshot"); state.persist()?; Ok(value) }
@@ -163,6 +188,15 @@ fn automatically_split_continuous(draft_id: String, app: State<'_, Mutex<AppStat
 fn compose_chapter(chapter_id: String, app: State<'_, Mutex<AppState>>) -> Result<Document, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; compose(&state.store, &chapter_id) }
 
 #[tauri::command]
+fn get_style_profile(app: State<'_, Mutex<AppState>>) -> Result<EditorStyleProfile, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; Ok(state.store.style_profile.clone()) }
+#[tauri::command]
+fn update_style_profile(profile: EditorStyleProfile, app: State<'_, Mutex<AppState>>) -> Result<EditorStyleProfile, String> { if profile.font_family.trim().is_empty() { return Err("Font family is required".into()); } if !(8.0..=72.0).contains(&profile.font_size_pt) { return Err("Font size must be between 8 and 72 pt".into()); } if !["single", "1.15", "1.5", "double"].contains(&profile.line_spacing.as_str()) { return Err("Unsupported line spacing".into()); } let mut state = app.lock().map_err(|_| "Project lock poisoned")?; state.store.style_profile = profile.clone(); status(&mut state, "saved", "Writing style saved"); state.persist()?; Ok(profile) }
+#[tauri::command]
+fn writing_stats(app: State<'_, Mutex<AppState>>) -> Result<WritingStats, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; Ok(make_writing_stats(&state.store)) }
+#[tauri::command]
+fn set_daily_word_target(target: i64, app: State<'_, Mutex<AppState>>) -> Result<WritingGoals, String> { if target < 0 { return Err("Daily word target must be zero or greater".into()); } let mut state = app.lock().map_err(|_| "Project lock poisoned")?; state.store.writing_goals.daily_target = target; status(&mut state, "saved", "Daily writing goal saved"); state.persist()?; Ok(state.store.writing_goals.clone()) }
+
+#[tauri::command]
 fn integrity_check(app: State<'_, Mutex<AppState>>) -> Result<IntegrityReport, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; status(&mut state, "integrity-check", "Checking project integrity…"); let db = state.db_path()?; let connection = Connection::open(db).map_err(|e| e.to_string())?; let value: String = connection.query_row("PRAGMA integrity_check", [], |row| row.get(0)).map_err(|e| e.to_string())?; let checked_at = timestamp(); let report = if value == "ok" { IntegrityReport { ok: true, message: "Integrity check passed".into(), checked_at } } else { IntegrityReport { ok: false, message: value, checked_at } }; status(&mut state, if report.ok { "saved" } else { "failed" }, &report.message); state.persist()?; Ok(report) }
 #[tauri::command]
 fn create_backup(app: State<'_, Mutex<AppState>>) -> Result<BackupRecord, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let db = state.db_path()?; let backup_id = id("backup"); let path = state.root.as_ref().unwrap().join(".weave").join("backups").join(format!("{backup_id}.db")); let created_at = timestamp(); let value = BackupRecord { id: backup_id.clone(), path: path.to_string_lossy().into_owned(), created_at: created_at.clone(), integrity: "ok".into() }; state.store.backups.push(value.clone()); status(&mut state, "backup", "Backup captured"); state.persist()?; let checkpoint = Connection::open(&db).map_err(|e| e.to_string())?; checkpoint.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").map_err(|e| e.to_string())?; fs::copy(&db, &path).map_err(|e| e.to_string())?; let connection = Connection::open(&db).map_err(|e| e.to_string())?; let json = serde_json::to_string(&state.store).map_err(|e| e.to_string())?; connection.execute("INSERT OR REPLACE INTO backups(id, path, created_at, integrity, state_json) VALUES (?1, ?2, ?3, ?4, ?5)", params![&backup_id, &value.path, &created_at, "ok", &json]).map_err(|e| e.to_string())?; Ok(value) }
@@ -171,9 +205,9 @@ fn recover_from_backup(backup_id: String, app: State<'_, Mutex<AppState>>) -> Re
 #[tauri::command]
 fn get_status(app: State<'_, Mutex<AppState>>) -> Result<OperationStatus, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; Ok(state.store.status.clone()) }
 #[tauri::command]
-fn project_snapshot(app: State<'_, Mutex<AppState>>) -> Result<ProjectSnapshot, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let project = state.store.project.clone().ok_or_else(|| "No project is open".to_string())?; Ok(ProjectSnapshot { project, stories: state.store.stories.clone(), chapters: state.store.chapters.clone(), scene_sets: state.store.scene_sets.clone(), scenes: state.store.scenes.clone(), continuous_drafts: state.store.drafts.clone(), status: state.store.status.clone() }) }
+fn project_snapshot(app: State<'_, Mutex<AppState>>) -> Result<ProjectSnapshot, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let project = state.store.project.clone().ok_or_else(|| "No project is open".to_string())?; Ok(ProjectSnapshot { project, stories: state.store.stories.clone(), chapters: state.store.chapters.clone(), scene_sets: state.store.scene_sets.clone(), scenes: state.store.scenes.clone(), continuous_drafts: state.store.drafts.clone(), style_profile: state.store.style_profile.clone(), writing_stats: make_writing_stats(&state.store), status: state.store.status.clone() }) }
 #[tauri::command]
 fn write_export(filename: String, bytes: Vec<u8>, app: State<'_, Mutex<AppState>>) -> Result<String, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let root = state.root.as_ref().ok_or_else(|| "No project is open".to_string())?; let exports = root.join(".weave").join("exports"); fs::create_dir_all(&exports).map_err(|e| e.to_string())?; let safe = Path::new(&filename).file_name().ok_or_else(|| "Invalid export filename".to_string())?; let path = exports.join(safe); fs::write(&path, bytes).map_err(|e| e.to_string())?; Ok(path.to_string_lossy().into_owned()) }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() { tauri::Builder::default().manage(Mutex::new(AppState::default())).invoke_handler(tauri::generate_handler![create_project, open_project, get_project, create_story, create_chapter, create_scene, list_stories, list_chapters, list_scene_sets, list_scenes, rename_scene, reorder_scene, get_document, get_revision, save_document, enter_continuous_draft, get_continuous_draft, keep_continuous_separate, automatically_split_continuous, compose_chapter, integrity_check, create_backup, recover_from_backup, get_status, project_snapshot, write_export]).run(tauri::generate_context!()).expect("error while running Weave"); }
+pub fn run() { tauri::Builder::default().manage(Mutex::new(AppState::default())).invoke_handler(tauri::generate_handler![create_project, open_project, get_project, create_story, create_chapter, create_scene, list_stories, list_chapters, list_scene_sets, list_scenes, rename_scene, reorder_scene, get_document, get_revision, save_document, get_style_profile, update_style_profile, writing_stats, set_daily_word_target, enter_continuous_draft, get_continuous_draft, keep_continuous_separate, automatically_split_continuous, compose_chapter, integrity_check, create_backup, recover_from_backup, get_status, project_snapshot, write_export]).run(tauri::generate_context!()).expect("error while running Weave"); }

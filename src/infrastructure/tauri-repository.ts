@@ -3,6 +3,7 @@ import type { ProjectRepository, DocumentHead, SaveDocumentResult, SplitResult }
 import type {
   BackupRecord,
   Chapter,
+  EditorStyleProfile,
   ContinuousDraft,
   IntegrityReport,
   OperationStatus,
@@ -12,7 +13,9 @@ import type {
   Scene,
   SceneSet,
   Story,
-  StructuredDocument
+  StructuredDocument,
+  WritingGoals,
+  WritingStats
 } from '../domain/types';
 
 /** The only renderer-to-desktop boundary. Components never call invoke directly. */
@@ -34,6 +37,10 @@ export class TauriProjectRepository implements ProjectRepository {
   getDocument(documentId: string): Promise<DocumentHead> { return command('get_document', { documentId }); }
   getRevision(revisionId: string): Promise<Revision> { return command('get_revision', { revisionId }); }
   saveDocument(documentId: string, document: StructuredDocument, expectedRevision: number): Promise<SaveDocumentResult> { return command('save_document', { documentId, document, expectedRevision }); }
+  getStyleProfile(): Promise<EditorStyleProfile> { return command('get_style_profile'); }
+  updateStyleProfile(profile: EditorStyleProfile): Promise<EditorStyleProfile> { return command('update_style_profile', { profile }); }
+  getWritingStats(): Promise<WritingStats> { return command('writing_stats'); }
+  setDailyWordTarget(target: number): Promise<WritingGoals> { return command('set_daily_word_target', { target }); }
   enterContinuousDraft(chapterId: string): Promise<ContinuousDraft> { return command('enter_continuous_draft', { chapterId }); }
   getContinuousDraft(draftId: string): Promise<ContinuousDraft> { return command('get_continuous_draft', { draftId }); }
   keepContinuousSeparate(draftId: string): Promise<ContinuousDraft> { return command('keep_continuous_separate', { draftId }); }

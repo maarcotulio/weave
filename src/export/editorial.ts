@@ -1,6 +1,6 @@
 import type { ProjectRepository } from '../domain/repository';
 import { blockText } from '../domain/document';
-import type { DocumentBlock, ExportFormat, ExportOptions, ExportedFile, Revision, StructuredDocument, TextRun } from '../domain/types';
+import { DEFAULT_EDITOR_STYLE, type DocumentBlock, type EditorStyleProfile, type ExportFormat, type ExportOptions, type ExportedFile, type Revision, type StructuredDocument, type TextRun } from '../domain/types';
 
 export const EDITORIAL_TEMPLATE = Object.freeze({
   fontFamily: 'Times New Roman',
@@ -51,31 +51,45 @@ export function renderPlainText(document: StructuredDocument, options: ExportOpt
   return `${header}\n${'='.repeat(Math.max(3, header.length))}\n\n${bodyLines(document, 'text').join('\n\n')}\n`;
 }
 
-function renderWordRun(run: TextRun): string {
+function lineSpacingTwips(profile: EditorStyleProfile): number {
+  if (profile.lineSpacing === 'single') return 240;
+  if (profile.lineSpacing === '1.15') return 276;
+  if (profile.lineSpacing === '1.5') return 360;
+  return 480;
+}
+
+function effectiveStyle(options: ExportOptions): EditorStyleProfile {
+  return options.styleProfile ?? DEFAULT_EDITOR_STYLE;
+}
+
+function renderWordRun(run: TextRun, profile: EditorStyleProfile): string {
   const properties = [
+    `<w:rFonts w:ascii="${escapeXml(profile.fontFamily)}" w:hAnsi="${escapeXml(profile.fontFamily)}"/>`,
+    `<w:sz w:val="${Math.round(profile.fontSizePt * 2)}"/>`,
     run.marks.includes('bold') ? '<w:b/>' : '',
     run.marks.includes('italic') ? '<w:i/>' : '',
     run.marks.includes('underline') ? '<w:u w:val="single"/>' : ''
   ].join('');
-  return `<w:r>${properties ? `<w:rPr>${properties}</w:rPr>` : ''}<w:t xml:space="preserve">${escapeXml(run.text)}</w:t></w:r>`;
+  return `<w:r><w:rPr>${properties}</w:rPr><w:t xml:space="preserve">${escapeXml(run.text)}</w:t></w:r>`;
 }
 
-function renderWordParagraph(block: DocumentBlock): string {
-  if (block.kind === 'scene-break') return '<w:p><w:pPr><w:spacing w:after="240"/></w:pPr><w:r><w:t>***</w:t></w:r></w:p>';
+function renderWordParagraph(block: DocumentBlock, profile: EditorStyleProfile): string {
+  if (block.kind === 'scene-break') return `<w:p><w:pPr><w:spacing w:after="240"/></w:pPr><w:r><w:t>***</w:t></w:r></w:p>`;
   const style = block.kind === 'heading' ? `w:pStyle w:val="Heading${block.headingLevel ?? 1}"` : '';
-  return `<w:p><w:pPr>${style ? `<${style}/>` : ''}<w:spacing w:line="480" w:lineRule="auto"/></w:pPr>${block.runs.map(renderWordRun).join('')}</w:p>`;
+  return `<w:p><w:pPr>${style ? `<${style}/>` : ''}<w:spacing w:line="${lineSpacingTwips(profile)}" w:lineRule="auto"/></w:pPr>${block.runs.map((run) => renderWordRun(run, profile)).join('')}</w:p>`;
 }
 
 function xmlFiles(document: StructuredDocument, options: ExportOptions): Map<string, Uint8Array> {
   const encoder = new TextEncoder();
+  const profile = effectiveStyle(options);
   const header = options.header ?? options.title;
   const pageField = options.pageNumbering === false ? '' : '<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="end"/></w:r>';
   const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/></Types>`;
   const relationships = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`;
   const documentRelationships = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/></Relationships>`;
-  const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="24"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:line="480" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults></w:styles>`;
-  const headerXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/></w:rPr><w:t>${escapeXml(header)}</w:t></w:r>${pageField}</w:p></w:hdr>`;
-  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${document.blocks.map(renderWordParagraph).join('')}<w:sectPr><w:headerReference w:type="default" r:id="rId1"/><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`;
+  const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${escapeXml(profile.fontFamily)}" w:hAnsi="${escapeXml(profile.fontFamily)}"/><w:sz w:val="${Math.round(profile.fontSizePt * 2)}"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:line="${lineSpacingTwips(profile)}" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults></w:styles>`;
+  const headerXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="${escapeXml(profile.fontFamily)}" w:hAnsi="${escapeXml(profile.fontFamily)}"/><w:sz w:val="${Math.round(profile.fontSizePt * 2)}"/></w:rPr><w:t>${escapeXml(header)}</w:t></w:r>${pageField}</w:p></w:hdr>`;
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${document.blocks.map((block) => renderWordParagraph(block, profile)).join('')}<w:sectPr><w:headerReference w:type="default" r:id="rId1"/><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`;
   const files = new Map<string, Uint8Array>();
   files.set('[Content_Types].xml', encoder.encode(contentTypes));
   files.set('_rels/.rels', encoder.encode(relationships));
@@ -130,6 +144,7 @@ function pdfEscape(value: string): string {
 }
 
 function renderPdf(document: StructuredDocument, options: ExportOptions): Uint8Array {
+  const profile = effectiveStyle(options);
   const lines = [options.header ?? options.title, ...(options.author ? [options.author] : []), '', ...bodyLines(document, 'text').flatMap((line) => {
     const chunks: string[] = [];
     let rest = line;
@@ -137,19 +152,23 @@ function renderPdf(document: StructuredDocument, options: ExportOptions): Uint8A
     chunks.push(rest);
     return chunks;
   })];
+  const fontName = profile.fontFamily === 'Arial' ? 'Helvetica' : profile.fontFamily === 'Courier New' ? 'Courier' : 'Times-Roman';
+  const fontSize = profile.fontSizePt;
+  const lineHeight = Math.round(fontSize * (profile.lineSpacing === 'single' ? 1 : profile.lineSpacing === '1.15' ? 1.15 : profile.lineSpacing === '1.5' ? 1.5 : 2));
+  const linesPerPage = Math.max(1, Math.floor(680 / lineHeight));
   const pages: string[][] = [];
-  for (let index = 0; index < lines.length; index += 42) pages.push(lines.slice(index, index + 42));
+  for (let index = 0; index < lines.length; index += linesPerPage) pages.push(lines.slice(index, index + linesPerPage));
   if (!pages.length) pages.push([]);
   const objects: string[] = [];
   const pageIds: number[] = [];
   objects.push('<< /Type /Catalog /Pages 2 0 R >>');
   objects.push('');
-  objects.push('<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman >>');
+  objects.push(`<< /Type /Font /Subtype /Type1 /BaseFont /${fontName} >>`);
   pages.forEach((page, pageIndex) => {
     const pageId = objects.length + 1;
     const contentId = pageId + 1;
     pageIds.push(pageId);
-    const commands = ['BT', '/F1 12 Tf', '72 760 Td', ...page.map((line, lineIndex) => `${lineIndex ? '0 -34 Td ' : ''}(${pdfEscape(line)}) Tj`), options.pageNumbering === false ? '' : `0 -34 Td (${pageIndex + 1}) Tj`, 'ET'].filter(Boolean).join('\n');
+    const commands = ['BT', `/F1 ${fontSize} Tf`, '72 760 Td', ...page.map((line, lineIndex) => `${lineIndex ? `0 -${lineHeight} Td ` : ''}(${pdfEscape(line)}) Tj`), options.pageNumbering === false ? '' : `0 -${lineHeight} Td (${pageIndex + 1}) Tj`, 'ET'].filter(Boolean).join('\n');
     objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentId} 0 R >>`);
     objects.push(`<< /Length ${commands.length} >>\nstream\n${commands}\nendstream`);
   });

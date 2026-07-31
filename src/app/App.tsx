@@ -1,25 +1,47 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { InMemoryProjectRepository, type DocumentHead, type ProjectRepository } from '../domain/repository';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AutosaveController, type AutosaveStatus } from '../domain/autosave';
 import { blockText, documentFromText, replaceBlockText, toggleMarks } from '../domain/document';
+import { DEFAULT_EDITOR_STYLE, FONT_FAMILY_OPTIONS, FONT_SIZE_OPTIONS, LINE_SPACING_OPTIONS, type Chapter, type ContinuousDraft, type EditorStyleProfile, type ExportFormat, type ProjectSnapshot, type Scene, type SemanticMark, type StructuredDocument, type WritingStats } from '../domain/types';
+import { InMemoryProjectRepository, type DocumentHead, type ProjectRepository } from '../domain/repository';
 import { exportCapturedRevision } from '../export/editorial';
 import { TauriProjectRepository } from '../infrastructure/tauri-repository';
-import type { Chapter, ContinuousDraft, ExportFormat, OperationStatus, ProjectSnapshot, Scene, SemanticMark, StructuredDocument } from '../domain/types';
 
 const isDesktop = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 const formats: ExportFormat[] = ['pdf', 'docx', 'markdown', 'text'];
+const lineHeight: Record<EditorStyleProfile['lineSpacing'], number> = { single: 1, '1.15': 1.15, '1.5': 1.5, double: 2 };
 
 function initialDocument(): StructuredDocument { return documentFromText(''); }
 
-function StatusBar({ status }: { status: OperationStatus }) {
+function StatusBar({ status }: { status: AutosaveStatus }) {
   return <div className={`status status-${status.state}`} role="status"><span className="status-dot" />{status.message}</div>;
 }
 
-function Editor({ document, onChange, readOnly = false }: { document: StructuredDocument; onChange: (value: StructuredDocument) => void; readOnly?: boolean }) {
+function StyleControls({ profile, onChange, disabled }: { profile: EditorStyleProfile; onChange: (profile: EditorStyleProfile) => void; disabled?: boolean }) {
+  return <div className="style-controls" aria-label="Writing style controls">
+    <label>Font<select aria-label="Font family" value={profile.fontFamily} disabled={disabled} onChange={(event) => onChange({ ...profile, fontFamily: event.target.value })}>{FONT_FAMILY_OPTIONS.map((font) => <option key={font} value={font}>{font}</option>)}</select></label>
+    <label>Size<select aria-label="Font size" value={profile.fontSizePt} disabled={disabled} onChange={(event) => onChange({ ...profile, fontSizePt: Number(event.target.value) })}>{FONT_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size} pt</option>)}</select></label>
+    <label>Spacing<select aria-label="Line spacing" value={profile.lineSpacing} disabled={disabled} onChange={(event) => onChange({ ...profile, lineSpacing: event.target.value as EditorStyleProfile['lineSpacing'] })}>{LINE_SPACING_OPTIONS.map((spacing) => <option key={spacing} value={spacing}>{spacing === '1.15' ? '1.15' : spacing === '1.5' ? '1.5' : spacing[0].toUpperCase() + spacing.slice(1)}</option>)}</select></label>
+  </div>;
+}
+
+function GoalPanel({ stats, onSaveTarget }: { stats: WritingStats; onSaveTarget: (target: number) => void }) {
+  const [target, setTarget] = useState(String(stats.dailyTarget));
+  useEffect(() => setTarget(String(stats.dailyTarget)), [stats.dailyTarget]);
+  const progress = stats.dailyTarget > 0 ? Math.min(100, Math.round((stats.dailyWords / stats.dailyTarget) * 100)) : 0;
+  return <section className="goal-panel" aria-label="Writing goals">
+    <div className="goal-stat"><span className="goal-label">TODAY · {stats.date}</span><strong>{stats.dailyWords.toLocaleString()} <small>/ {stats.dailyTarget.toLocaleString()} words</small></strong><div className="goal-track"><span style={{ width: `${progress}%` }} /></div></div>
+    <div className="goal-stat project-total"><span className="goal-label">PROJECT TOTAL</span><strong>{stats.projectWords.toLocaleString()} <small>words</small></strong></div>
+    <label className="goal-editor">Daily target<input type="number" min="0" step="1" value={target} onChange={(event) => setTarget(event.target.value)} onBlur={() => onSaveTarget(Math.max(0, Number(target) || 0))} onKeyDown={(event) => { if (event.key === 'Enter') { event.currentTarget.blur(); } }} /></label>
+  </section>;
+}
+
+function Editor({ document, styleProfile, onChange, readOnly = false }: { document: StructuredDocument; styleProfile: EditorStyleProfile; onChange: (value: StructuredDocument) => void; readOnly?: boolean }) {
   const updateBlock = (index: number, value: StructuredDocument['blocks'][number]) => {
     const blocks = document.blocks.map((block, blockIndex) => blockIndex === index ? value : block);
     onChange({ ...document, blocks });
   };
-  return <div className="editor" aria-label={readOnly ? 'Composed chapter' : 'Manuscript editor'}>
+  const style = { '--editor-font-family': styleProfile.fontFamily, '--editor-font-size': `${styleProfile.fontSizePt}pt`, '--editor-line-height': lineHeight[styleProfile.lineSpacing] } as React.CSSProperties;
+  return <div className="editor" style={style} aria-label={readOnly ? 'Composed chapter' : 'Manuscript editor'}>
     {document.blocks.map((block, index) => block.kind === 'scene-break' ?
       <div className="scene-break" key={block.id}><span>scene break · composed view</span></div> :
       <div className="block" key={block.id}>
@@ -59,13 +81,26 @@ export default function App() {
   const [draft, setDraft] = useState<ContinuousDraft>();
   const [mode, setMode] = useState<'scene' | 'continuous' | 'compose'>('scene');
   const [editorDocument, setEditorDocument] = useState<StructuredDocument>(initialDocument());
+  const [styleProfile, setStyleProfile] = useState<EditorStyleProfile>({ ...DEFAULT_EDITOR_STYLE });
   const [showReturnChoices, setShowReturnChoices] = useState(false);
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState('');
+  const [autosaveStatus, setAutosaveStatus] = useState<AutosaveStatus>({ state: 'saved', message: 'All changes saved' });
+  const documentHeadRef = useRef<DocumentHead>();
+  const editorDocumentRef = useRef(editorDocument);
+  const latestSaveRef = useRef<() => Promise<void>>(async () => undefined);
+  documentHeadRef.current = documentHead;
+  editorDocumentRef.current = editorDocument;
+
+  const autosave = useMemo(() => new AutosaveController(() => latestSaveRef.current(), {
+    delayMs: 700,
+    onStatus: (status) => { setAutosaveStatus(status); if (status.state !== 'error') setLocalError(''); }
+  }), []);
 
   const refresh = useCallback(async (keepSelection = true) => {
     const next = await repository.snapshot();
     setSnapshot(next);
+    setStyleProfile(next.styleProfile);
     const storyId = keepSelection ? (selectedStoryId && next.stories.some((item) => item.id === selectedStoryId) ? selectedStoryId : next.stories[0]?.id) : next.stories[0]?.id;
     const chapterList = next.chapters.filter((item) => item.storyId === storyId);
     const chapterId = keepSelection ? (selectedChapterId && chapterList.some((item) => item.id === selectedChapterId) ? selectedChapterId : chapterList[0]?.id) : chapterList[0]?.id;
@@ -78,7 +113,6 @@ export default function App() {
   }, [repository, selectedChapterId, selectedSceneId, selectedStoryId]);
 
   useEffect(() => { if (snapshot) void refresh(); }, []); // desktop starts at the project chooser
-
   useEffect(() => {
     if (!selectedChapterId) return;
     void repository.listScenes(selectedChapterId).then((nextScenes) => {
@@ -86,52 +120,84 @@ export default function App() {
       if (!selectedSceneId || !nextScenes.some((scene) => scene.id === selectedSceneId)) setSelectedSceneId(nextScenes[0]?.id);
     }).catch(() => undefined);
   }, [repository, selectedChapterId]);
-
   useEffect(() => {
     if (!selectedSceneId || mode !== 'scene') return;
-    void repository.getDocument(scenes.find((scene) => scene.id === selectedSceneId)?.documentId ?? '').then((head) => { setDocumentHead(head); setEditorDocument(head.document); }).catch(() => undefined);
+    void repository.getDocument(scenes.find((scene) => scene.id === selectedSceneId)?.documentId ?? '').then((head) => {
+      setDocumentHead(head); documentHeadRef.current = head; setEditorDocument(head.document); editorDocumentRef.current = head.document;
+    }).catch(() => undefined);
   }, [mode, repository, scenes, selectedSceneId]);
+  useEffect(() => {
+    const flush = () => { void autosave.flush(); };
+    window.addEventListener('beforeunload', flush);
+    document.addEventListener('visibilitychange', flush);
+    return () => { window.removeEventListener('beforeunload', flush); document.removeEventListener('visibilitychange', flush); };
+  }, [autosave]);
 
   const run = async (operation: () => Promise<void>) => { setBusy(true); setLocalError(''); try { await operation(); } catch (error) { setLocalError(error instanceof Error ? error.message : String(error)); } finally { setBusy(false); } };
 
+  const saveCurrentDocument = useCallback(async () => {
+    const head = documentHeadRef.current;
+    if (!head || mode === 'compose') return;
+    const result = await repository.saveDocument(head.documentId, editorDocumentRef.current, head.revision);
+    const nextHead = { documentId: head.documentId, document: result.revision.document, revision: result.revision.number, revisionId: result.revision.id };
+    documentHeadRef.current = nextHead;
+    editorDocumentRef.current = result.revision.document;
+    setDocumentHead(nextHead); setEditorDocument(result.revision.document);
+    const writingStats = await repository.getWritingStats();
+    setSnapshot((current) => current ? { ...current, writingStats, status: result.status } : current);
+  }, [mode, repository]);
+  latestSaveRef.current = saveCurrentDocument;
+
   const createProject = () => void run(async () => {
-    const directory = window.prompt('Project directory', `${isDesktop ? '' : '/tmp/' }my-weave-project`); if (!directory) return;
+    await autosave.flush();
+    const directory = window.prompt('Project directory', `${isDesktop ? '' : '/tmp/'}my-weave-project`); if (!directory) return;
     const name = window.prompt('Project name', 'My story') || 'My story';
     await repository.createProject(directory, name); const story = await repository.createStory('Story 1'); const chapter = await repository.createChapter(story.id, 'Chapter 1'); await repository.createScene(chapter.id, 'Scene 1'); await repository.createScene(chapter.id, 'Scene 2'); await refresh(false);
   });
-  const openProject = () => void run(async () => { const directory = window.prompt('Open .weave project directory'); if (!directory) return; await repository.openProject(directory); await refresh(false); });
+  const openProject = () => void run(async () => { await autosave.flush(); const directory = window.prompt('Open .weave project directory'); if (!directory) return; await repository.openProject(directory); await refresh(false); });
   const addScene = () => void run(async () => { if (!selectedChapterId) return; const scene = await repository.createScene(selectedChapterId, `Scene ${scenes.length + 1}`); await refresh(); setSelectedSceneId(scene.id); });
   const addChapter = () => void run(async () => { if (!selectedStoryId) return; const chapterNumber = (snapshot?.chapters.filter((item) => item.storyId === selectedStoryId).length ?? 0) + 1; await repository.createChapter(selectedStoryId, `Chapter ${chapterNumber}`); await refresh(false); });
   const renameScene = (scene: Scene) => void run(async () => { const title = window.prompt('Scene title', scene.title); if (title?.trim()) { await repository.renameScene(scene.id, title.trim()); await refresh(); } });
   const moveScene = (scene: Scene, delta: number) => void run(async () => { await repository.reorderScene(scene.id, scene.position + delta); await refresh(); });
 
-  const selectScene = (scene: Scene) => { setMode('scene'); setDraft(undefined); setSelectedSceneId(scene.id); };
-  const openContinuous = () => void run(async () => { if (!selectedChapterId) return; const value = await repository.enterContinuousDraft(selectedChapterId); const head = await repository.getDocument(value.documentId); setDraft(value); setDocumentHead(head); setEditorDocument(head.document); setMode('continuous'); await refresh(); });
-  const returnToScenes = () => setShowReturnChoices(true);
-  const split = () => void run(async () => { if (!draft) return; const result = await repository.automaticallySplitContinuous(draft.id); setShowReturnChoices(false); setDraft(undefined); setMode('scene'); await refresh(false); setSelectedSceneId(result.scenes[0]?.id); });
-  const keepSeparate = () => void run(async () => { if (!draft) return; await repository.keepContinuousSeparate(draft.id); setShowReturnChoices(false); setDraft(undefined); setMode('scene'); await refresh(false); });
-  const save = () => void run(async () => { if (!documentHead) return; const result = await repository.saveDocument(documentHead.documentId, editorDocument, documentHead.revision); setDocumentHead({ documentId: documentHead.documentId, document: result.revision.document, revision: result.revision.number, revisionId: result.revision.id }); setEditorDocument(result.revision.document); await refresh(); });
-  const compose = () => void run(async () => { if (!selectedChapterId) return; const composed = await repository.composeChapter(selectedChapterId); setMode('compose'); setEditorDocument(composed); setDocumentHead(undefined); });
+  const selectScene = (scene: Scene) => void run(async () => { await autosave.flush(); setMode('scene'); setDraft(undefined); setSelectedSceneId(scene.id); });
+  const openContinuous = () => void run(async () => {
+    if (!selectedChapterId) return;
+    await autosave.flush();
+    const value = await repository.enterContinuousDraft(selectedChapterId); const head = await repository.getDocument(value.documentId);
+    setDraft(value); setDocumentHead(head); documentHeadRef.current = head; setEditorDocument(head.document); editorDocumentRef.current = head.document; setMode('continuous'); await refresh();
+  });
+  const returnToScenes = () => void run(async () => { await autosave.flush(); setShowReturnChoices(true); });
+  const split = () => void run(async () => { if (!draft) return; await autosave.flush(); const result = await repository.automaticallySplitContinuous(draft.id); setShowReturnChoices(false); setDraft(undefined); setMode('scene'); await refresh(false); setSelectedSceneId(result.scenes[0]?.id); });
+  const keepSeparate = () => void run(async () => { if (!draft) return; await autosave.flush(); await repository.keepContinuousSeparate(draft.id); setShowReturnChoices(false); setDraft(undefined); setMode('scene'); await refresh(false); });
+  const save = () => void run(async () => { if (!documentHeadRef.current) return; autosave.markDirty(); await autosave.flush(); });
+  const compose = () => void run(async () => { if (!selectedChapterId) return; await autosave.flush(); const composed = await repository.composeChapter(selectedChapterId); setMode('compose'); setEditorDocument(composed); editorDocumentRef.current = composed; setDocumentHead(undefined); documentHeadRef.current = undefined; });
   const doExport = () => void run(async () => {
-    if (!documentHead) { setLocalError('Save a scene or continuous draft before exporting.'); return; }
-    const options = { title: snapshot?.project.name ?? 'Manuscript', header: snapshot?.project.name ?? 'Manuscript', pageNumbering: true };
-    const files = formats.map((format) => exportCapturedRevision({ id: documentHead.revisionId, documentId: documentHead.documentId, number: documentHead.revision, document: documentHead.document, createdAt: new Date().toISOString(), reason: 'edit' }, format, options));
+    await autosave.flush();
+    const head = documentHeadRef.current;
+    if (!head) { setLocalError('Save a scene or continuous draft before exporting.'); return; }
+    const options = { title: snapshot?.project.name ?? 'Manuscript', header: snapshot?.project.name ?? 'Manuscript', pageNumbering: true, styleProfile };
+    const files = formats.map((format) => exportCapturedRevision({ id: head.revisionId, documentId: head.documentId, number: head.revision, document: head.document, createdAt: new Date().toISOString(), reason: 'edit' }, format, options));
     for (const file of files) { await repository.writeExport(file); if (!isDesktop) { const url = URL.createObjectURL(new Blob([file.bytes as unknown as BlobPart], { type: file.mimeType })); const anchor = document.createElement('a'); anchor.href = url; anchor.download = file.filename; anchor.click(); URL.revokeObjectURL(url); } }
   });
-  const checkIntegrity = () => void run(async () => { await repository.integrityCheck(); await refresh(); });
-  const backup = () => void run(async () => { await repository.createBackup(); await refresh(); });
+  const checkIntegrity = () => void run(async () => { await autosave.flush(); await repository.integrityCheck(); await refresh(); });
+  const backup = () => void run(async () => { await autosave.flush(); await repository.createBackup(); await refresh(); });
+  const updateStyle = (profile: EditorStyleProfile) => void run(async () => { const saved = await repository.updateStyleProfile(profile); setStyleProfile(saved); setSnapshot((current) => current ? { ...current, styleProfile: saved } : current); });
+  const updateGoal = (target: number) => void run(async () => { await repository.setDailyWordTarget(target); const writingStats = await repository.getWritingStats(); setSnapshot((current) => current ? { ...current, writingStats } : current); });
+  const retryAutosave = () => void run(async () => { await autosave.retry(); });
 
   if (!snapshot) return <main className="welcome"><div className="welcome-card"><div className="mark">W</div><p className="eyebrow">OFFLINE DESKTOP WRITING</p><h1>Make room for the story.</h1><p className="welcome-copy">Weave keeps your manuscript, revisions, SQLite database, and recovery files in a visible <code>.weave</code> project directory. No server. No network. No guesswork.</p><div className="welcome-actions"><button type="button" className="primary-button" onClick={createProject} disabled={busy}>Create project</button><button type="button" className="secondary-button" onClick={openProject} disabled={busy}>Open project</button></div>{localError && <p className="error-message">{localError}</p>}<p className="offline-note"><span className="status-dot" /> local-only · SQLite · revisioned</p></div></main>;
 
-  const activeChapter = snapshot.chapters.find((chapter) => chapter.id === selectedChapterId);
+  const activeChapter: Chapter | undefined = snapshot.chapters.find((chapter) => chapter.id === selectedChapterId);
   const activeScene = scenes.find((scene) => scene.id === selectedSceneId);
   return <div className="app-shell">
-    <header className="topbar"><div className="brand"><span className="brand-mark">W</span><span>Weave</span><span className="offline-pill">OFFLINE</span></div><div className="top-actions"><button type="button" onClick={checkIntegrity}>Integrity</button><button type="button" onClick={backup}>Backup</button><button type="button" onClick={doExport} disabled={busy || mode === 'compose'}>Export all</button><StatusBar status={snapshot.status} /></div></header>
-    <aside className="sidebar"><div className="sidebar-heading"><span>MANUSCRIPT</span><button type="button" onClick={createProject} aria-label="New project">+</button></div>{snapshot.stories.map((story) => <div key={story.id} className="tree-group"><button type="button" className={`tree-item story ${selectedStoryId === story.id ? 'selected' : ''}`} onClick={() => setSelectedStoryId(story.id)}>▾ <span>{story.title}</span></button>{snapshot.chapters.filter((chapter) => chapter.storyId === story.id).map((chapter) => <div key={chapter.id} className="chapter-group"><button type="button" className={`tree-item chapter ${selectedChapterId === chapter.id ? 'selected' : ''}`} onClick={() => { setSelectedChapterId(chapter.id); setSelectedSceneId(undefined); }}>▾ <span>{chapter.title}</span></button>{selectedChapterId === chapter.id && scenes.map((scene) => <button type="button" key={scene.id} className={`tree-item scene ${selectedSceneId === scene.id && mode === 'scene' ? 'selected' : ''}`} onClick={() => selectScene(scene)}><span className="scene-index">{String(scene.position + 1).padStart(2, '0')}</span>{scene.title}</button>)}{selectedChapterId === chapter.id && <button type="button" className="add-scene" onClick={addScene}>+ New scene</button>}</div>)}</div>)}<button type="button" className="add-story" onClick={() => void run(async () => { const title = window.prompt('Story title', 'New story'); if (title) { await repository.createStory(title); await refresh(false); } })}>+ New story</button><div className="sidebar-bottom"><button type="button" onClick={addChapter} disabled={!selectedStoryId}>+ Chapter</button><button type="button" onClick={openProject}>Open</button></div></aside>
+    <header className="topbar"><div className="brand"><span className="brand-mark">W</span><span>Weave</span><span className="offline-pill">OFFLINE</span></div><div className="top-actions"><button type="button" onClick={checkIntegrity}>Integrity</button><button type="button" onClick={backup}>Backup</button><button type="button" onClick={doExport} disabled={busy || mode === 'compose'}>Export all</button><StatusBar status={autosaveStatus} />{autosaveStatus.state === 'error' && <button type="button" className="retry-button" onClick={retryAutosave}>Retry</button>}</div></header>
+    <aside className="sidebar"><div className="sidebar-heading"><span>MANUSCRIPT</span><button type="button" onClick={createProject} aria-label="New project">+</button></div>{snapshot.stories.map((story) => <div key={story.id} className="tree-group"><button type="button" className={`tree-item story ${selectedStoryId === story.id ? 'selected' : ''}`} onClick={() => void run(async () => { await autosave.flush(); setSelectedStoryId(story.id); })}>▾ <span>{story.title}</span></button>{snapshot.chapters.filter((chapter) => chapter.storyId === story.id).map((chapter) => <div key={chapter.id} className="chapter-group"><button type="button" className={`tree-item chapter ${selectedChapterId === chapter.id ? 'selected' : ''}`} onClick={() => void run(async () => { await autosave.flush(); setSelectedChapterId(chapter.id); setSelectedSceneId(undefined); })}>▾ <span>{chapter.title}</span></button>{selectedChapterId === chapter.id && scenes.map((scene) => <button type="button" key={scene.id} className={`tree-item scene ${selectedSceneId === scene.id && mode === 'scene' ? 'selected' : ''}`} onClick={() => selectScene(scene)}><span className="scene-index">{String(scene.position + 1).padStart(2, '0')}</span>{scene.title}</button>)}{selectedChapterId === chapter.id && <button type="button" className="add-scene" onClick={addScene}>+ New scene</button>}</div>)}</div>)}<button type="button" className="add-story" onClick={() => void run(async () => { const title = window.prompt('Story title', 'New story'); if (title) { await repository.createStory(title); await refresh(false); } })}>+ New story</button><div className="sidebar-bottom"><button type="button" onClick={addChapter} disabled={!selectedStoryId}>+ Chapter</button><button type="button" onClick={openProject}>Open</button></div></aside>
     <main className="workspace"><div className="workspace-head"><div><p className="eyebrow">{activeChapter?.title ?? 'Chapter'}</p><h1>{mode === 'continuous' ? 'Continuous draft' : mode === 'compose' ? 'Composed chapter' : activeScene?.title ?? 'Choose a scene'}</h1></div><div className="mode-switch"><button type="button" className={mode === 'scene' ? 'active' : ''} onClick={() => activeScene && selectScene(activeScene)}>Scenes</button><button type="button" className={mode === 'compose' ? 'active' : ''} onClick={compose}>Chapter view</button><button type="button" className={mode === 'continuous' ? 'active' : ''} onClick={openContinuous}>Continuous draft</button></div></div>
       {localError && <div className="inline-error" role="alert">{localError}</div>}
-      <section className="paper-wrap"><div className="paper-meta"><span>{mode === 'compose' ? 'NON-DESTRUCTIVE COMPOSITION' : mode === 'continuous' ? 'SEPARATE REVISION · SOURCE SNAPSHOT PRESERVED' : 'SCENE DOCUMENT'}</span><span>12 pt · Times New Roman · double spaced</span></div><Editor document={editorDocument} onChange={setEditorDocument} readOnly={mode === 'compose'} /><div className="paper-footer"><span>{mode === 'compose' ? 'Scene documents remain the source.' : 'Structured document · autosave is explicit'}</span>{documentHead && <span>revision {documentHead.revision}</span>}</div></section>
-      <footer className="editor-footer"><div>{mode === 'continuous' && <button type="button" className="secondary-button" onClick={returnToScenes}>Return to scenes</button>}{mode === 'scene' && activeScene && <><button type="button" className="secondary-button" onClick={() => renameScene(activeScene)}>Rename</button><button type="button" className="icon-button" onClick={() => moveScene(activeScene, -1)} aria-label="Move scene up">↑</button><button type="button" className="icon-button" onClick={() => moveScene(activeScene, 1)} aria-label="Move scene down">↓</button></>}{mode === 'compose' && <span className="guard-note">Composition is a view, never a second source.</span>}</div><div className="save-actions">{mode !== 'compose' && <button type="button" className="primary-button" onClick={save} disabled={busy || !documentHead}>Save revision</button>}</div></footer>
+      <GoalPanel stats={snapshot.writingStats} onSaveTarget={updateGoal} />
+      <section className="paper-wrap"><div className="paper-meta"><span>{mode === 'compose' ? 'NON-DESTRUCTIVE COMPOSITION' : mode === 'continuous' ? 'SEPARATE REVISION · SOURCE SNAPSHOT PRESERVED' : 'SCENE DOCUMENT'}</span><span>{styleProfile.fontSizePt} pt · {styleProfile.fontFamily} · {styleProfile.lineSpacing} spacing</span></div><StyleControls profile={styleProfile} onChange={updateStyle} disabled={mode === 'compose'} /><Editor document={editorDocument} styleProfile={styleProfile} onChange={(value) => { setEditorDocument(value); editorDocumentRef.current = value; if (mode !== 'compose') autosave.markDirty(); }} readOnly={mode === 'compose'} /><div className="paper-footer"><span>{mode === 'compose' ? 'Scene documents remain the source.' : 'Structured document · changes save automatically'}</span>{documentHead && <span>revision {documentHead.revision}</span>}</div></section>
+      <footer className="editor-footer"><div>{mode === 'continuous' && <button type="button" className="secondary-button" onClick={returnToScenes}>Return to scenes</button>}{mode === 'scene' && activeScene && <><button type="button" className="secondary-button" onClick={() => renameScene(activeScene)}>Rename</button><button type="button" className="icon-button" onClick={() => moveScene(activeScene, -1)} aria-label="Move scene up">↑</button><button type="button" className="icon-button" onClick={() => moveScene(activeScene, 1)} aria-label="Move scene down">↓</button></>}{mode === 'compose' && <span className="guard-note">Composition is a view, never a second source.</span>}</div><div className="save-actions">{mode !== 'compose' && <button type="button" className="secondary-button" onClick={save} disabled={busy || !documentHead}>Save now</button>}</div></footer>
     </main>
     {showReturnChoices && <ChoiceDialog onSplit={split} onKeep={keepSeparate} onCancel={() => setShowReturnChoices(false)} busy={busy} />}
   </div>;

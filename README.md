@@ -10,9 +10,17 @@ npm test
 npm run build
 # desktop development (requires the Tauri 2 system toolchain)
 npm run desktop:dev
+# desktop packaging (requires the Tauri 2 system toolchain)
+npm run desktop:build
 ```
 
 The first launch can create or open a project directory. The starter project contains a story, chapter, and two scenes. The browser/Vite fallback uses the in-memory repository for UI work; the desktop build uses SQLite through `src-tauri/`.
+
+## Writing experience
+
+- The editor uses a responsive, document-sized page with comfortable margins. Font family, font size, and line spacing are available above the page and saved in the project style profile; they remain separate from canonical structured document JSON and are applied to PDF/DOCX exports.
+- Writing saves automatically after a short typing pause. The saved/saving/error indicator stays visible, failed edits remain dirty for retry, and navigation, mode changes, exports, backups, and app close flush pending saves.
+- The goals panel shows the local-calendar-day word target/progress and the project total. The target is persisted. Project totals count one active source per chapter: an open continuous draft replaces its scene set for counting; kept-separate/split drafts are historical and are not double-counted.
 
 ## Phase 1 behavior
 

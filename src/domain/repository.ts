@@ -7,7 +7,9 @@ import {
   validateDocument
 } from './document';
 import { composeChapter, splitByExplicitMarkers } from './scenes';
+import { calculateProjectWordCount, documentMapFromRecords, localCalendarDate } from './goals';
 import {
+  DEFAULT_EDITOR_STYLE,
   type BackupRecord,
   type Chapter,
   type ContinuousDraft,
@@ -21,7 +23,10 @@ import {
   type Scene,
   type SceneSet,
   type Story,
-  type StructuredDocument
+  type StructuredDocument,
+  type EditorStyleProfile,
+  type WritingGoals,
+  type WritingStats
 } from './types';
 
 export interface DocumentHead {
@@ -58,6 +63,10 @@ export interface ProjectRepository {
   getDocument(documentId: string): Promise<DocumentHead>;
   getRevision(revisionId: string): Promise<Revision>;
   saveDocument(documentId: string, document: StructuredDocument, expectedRevision: number): Promise<SaveDocumentResult>;
+  getStyleProfile(): Promise<EditorStyleProfile>;
+  updateStyleProfile(profile: EditorStyleProfile): Promise<EditorStyleProfile>;
+  getWritingStats(): Promise<WritingStats>;
+  setDailyWordTarget(target: number): Promise<WritingGoals>;
   enterContinuousDraft(chapterId: string): Promise<ContinuousDraft>;
   getContinuousDraft(draftId: string): Promise<ContinuousDraft>;
   keepContinuousSeparate(draftId: string): Promise<ContinuousDraft>;
@@ -86,6 +95,8 @@ interface RepositoryState {
   documents: DocumentRecord[];
   drafts: ContinuousDraft[];
   backups: BackupRecord[];
+  styleProfile: EditorStyleProfile;
+  writingGoals: WritingGoals;
   status: OperationStatus;
 }
 
@@ -109,12 +120,14 @@ export class InMemoryProjectRepository implements ProjectRepository {
     documents: [],
     drafts: [],
     backups: [],
+    styleProfile: { ...DEFAULT_EDITOR_STYLE },
+    writingGoals: { dailyTarget: 500, dailyWordCounts: {} },
     status: initialStatus()
   };
   protected backupStates = new Map<string, RepositoryState>();
 
   async createProject(directory: string, name: string): Promise<Project> {
-    this.state = { stories: [], chapters: [], sceneSets: [], scenes: [], documents: [], drafts: [], backups: [], status: initialStatus() };
+    this.state = { stories: [], chapters: [], sceneSets: [], scenes: [], documents: [], drafts: [], backups: [], styleProfile: { ...DEFAULT_EDITOR_STYLE }, writingGoals: { dailyTarget: 500, dailyWordCounts: {} }, status: initialStatus() };
     this.backupStates.clear();
     const project: Project = { id: newId('project'), name, directory, schemaVersion: 1, createdAt: now(), updatedAt: now() };
     this.state.project = project;
@@ -219,12 +232,45 @@ export class InMemoryProjectRepository implements ProjectRepository {
       this.state.status = { state: 'revision-conflict', message: 'Save stopped: this document changed elsewhere', at: now() };
       throw new RevisionConflictError(documentId, expectedRevision, record.headRevision);
     }
+    const projectWordsBefore = this.currentProjectWordCount();
     record.headRevision += 1;
     const revision = makeRevision(documentId, document, record.headRevision, 'edit');
     record.revisions.push(revision);
+    const projectWordsAfter = this.currentProjectWordCount();
+    this.recordDailyWordDelta(projectWordsAfter - projectWordsBefore);
     this.touchProject();
     this.state.status = { state: 'saved', message: `Saved revision ${record.headRevision}`, at: now() };
     return { revision: deepClone(revision), status: this.state.status };
+  }
+
+  async getStyleProfile(): Promise<EditorStyleProfile> {
+    return deepClone(this.state.styleProfile ?? DEFAULT_EDITOR_STYLE);
+  }
+
+  async updateStyleProfile(profile: EditorStyleProfile): Promise<EditorStyleProfile> {
+    this.validateStyleProfile(profile);
+    this.state.styleProfile = deepClone(profile);
+    this.touchProject();
+    this.state.status = { state: 'saved', message: 'Writing style saved', at: now() };
+    return deepClone(this.state.styleProfile);
+  }
+
+  async getWritingStats(): Promise<WritingStats> {
+    const date = localCalendarDate();
+    return {
+      date,
+      dailyTarget: this.state.writingGoals?.dailyTarget ?? 500,
+      dailyWords: this.state.writingGoals?.dailyWordCounts?.[date] ?? 0,
+      projectWords: this.currentProjectWordCount()
+    };
+  }
+
+  async setDailyWordTarget(target: number): Promise<WritingGoals> {
+    if (!Number.isFinite(target) || target < 0) throw new Error('Daily word target must be zero or greater');
+    this.state.writingGoals.dailyTarget = Math.trunc(target);
+    this.touchProject();
+    this.state.status = { state: 'saved', message: 'Daily writing goal saved', at: now() };
+    return deepClone(this.state.writingGoals);
   }
 
   async enterContinuousDraft(chapterId: string): Promise<ContinuousDraft> {
@@ -344,8 +390,28 @@ export class InMemoryProjectRepository implements ProjectRepository {
       sceneSets: deepClone(this.state.sceneSets),
       scenes: deepClone(this.state.scenes),
       continuousDrafts: deepClone(this.state.drafts),
+      styleProfile: deepClone(this.state.styleProfile ?? DEFAULT_EDITOR_STYLE),
+      writingStats: await this.getWritingStats(),
       status: deepClone(this.state.status)
     };
+  }
+
+  protected currentProjectWordCount(): number {
+    return calculateProjectWordCount(this.state.chapters, this.state.scenes, this.state.drafts, documentMapFromRecords(this.state.documents));
+  }
+
+  private recordDailyWordDelta(delta: number): void {
+    if (!delta) return;
+    const date = localCalendarDate();
+    const goals = this.state.writingGoals ?? { dailyTarget: 500, dailyWordCounts: {} };
+    goals.dailyWordCounts[date] = Math.max(0, (goals.dailyWordCounts[date] ?? 0) + delta);
+    this.state.writingGoals = goals;
+  }
+
+  private validateStyleProfile(profile: EditorStyleProfile): void {
+    if (!profile.fontFamily.trim()) throw new Error('Font family is required');
+    if (!Number.isFinite(profile.fontSizePt) || profile.fontSizePt < 8 || profile.fontSizePt > 72) throw new Error('Font size must be between 8 and 72 pt');
+    if (!['single', '1.15', '1.5', 'double'].includes(profile.lineSpacing)) throw new Error('Unsupported line spacing');
   }
 
   protected addDocument(document: StructuredDocument, reason: Revision['reason']): DocumentRecord {

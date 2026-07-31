@@ -5,6 +5,24 @@ export type DocumentFormatVersion = typeof DOCUMENT_FORMAT_VERSION;
 export type SemanticMark = 'bold' | 'italic' | 'underline';
 export type BlockKind = 'paragraph' | 'heading' | 'scene-break';
 export type Alignment = 'left' | 'center' | 'right';
+export type LineSpacing = 'single' | '1.15' | '1.5' | 'double';
+
+export interface EditorStyleProfile {
+  /** Presentation only; never embedded in StructuredDocument. */
+  fontFamily: string;
+  fontSizePt: number;
+  lineSpacing: LineSpacing;
+}
+
+export const DEFAULT_EDITOR_STYLE: EditorStyleProfile = Object.freeze({
+  fontFamily: 'Times New Roman',
+  fontSizePt: 12,
+  lineSpacing: 'double'
+});
+
+export const FONT_FAMILY_OPTIONS = ['Times New Roman', 'Georgia', 'Arial', 'Courier New'] as const;
+export const FONT_SIZE_OPTIONS = [10, 11, 12, 14, 16, 18, 24] as const;
+export const LINE_SPACING_OPTIONS: LineSpacing[] = ['single', '1.15', '1.5', 'double'];
 
 export interface TextRun {
   text: string;
@@ -110,6 +128,19 @@ export interface OperationStatus {
   at: string;
 }
 
+export interface WritingGoals {
+  dailyTarget: number;
+  /** Net words added to the project on each local calendar date. */
+  dailyWordCounts: Record<string, number>;
+}
+
+export interface WritingStats {
+  date: string;
+  dailyTarget: number;
+  dailyWords: number;
+  projectWords: number;
+}
+
 export interface IntegrityReport {
   ok: boolean;
   message: string;
@@ -123,6 +154,8 @@ export interface ProjectSnapshot {
   sceneSets: SceneSet[];
   scenes: Scene[];
   continuousDrafts: ContinuousDraft[];
+  styleProfile: EditorStyleProfile;
+  writingStats: WritingStats;
   status: OperationStatus;
 }
 
@@ -131,6 +164,7 @@ export interface ExportOptions {
   author?: string;
   header?: string;
   pageNumbering?: boolean;
+  styleProfile?: EditorStyleProfile;
 }
 
 export type ExportFormat = 'pdf' | 'docx' | 'markdown' | 'text';

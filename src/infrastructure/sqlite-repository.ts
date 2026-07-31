@@ -13,6 +13,7 @@ import { join } from 'node:path';
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as { DatabaseSync: new (path: string) => any };
 import { InMemoryProjectRepository } from '../domain/repository';
 import { now } from '../domain/document';
+import { DEFAULT_EDITOR_STYLE, type EditorStyleProfile, type WritingGoals } from '../domain/types';
 import type { BackupRecord, OperationStatus, Project, StructuredDocument } from '../domain/types';
 import type { SaveDocumentResult, SplitResult, DocumentHead } from '../domain/repository';
 import type { Chapter, ContinuousDraft, IntegrityReport, Revision, Scene, SceneSet, Story } from '../domain/types';
@@ -26,6 +27,8 @@ interface PersistedState {
   documents: any[];
   drafts: ContinuousDraft[];
   backups: BackupRecord[];
+  styleProfile: EditorStyleProfile;
+  writingGoals: WritingGoals;
   status: OperationStatus;
 }
 
@@ -67,6 +70,18 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
   async createScene(chapterId: string, title: string, document?: StructuredDocument): Promise<Scene> { const value = await super.createScene(chapterId, title, document); this.persist(); return value; }
   async renameScene(sceneId: string, title: string): Promise<Scene> { const value = await super.renameScene(sceneId, title); this.persist(); return value; }
   async reorderScene(sceneId: string, position: number): Promise<Scene[]> { const value = await super.reorderScene(sceneId, position); this.persist(); return value; }
+
+  async updateStyleProfile(profile: EditorStyleProfile): Promise<EditorStyleProfile> {
+    const value = await super.updateStyleProfile(profile);
+    this.persist();
+    return value;
+  }
+
+  async setDailyWordTarget(target: number): Promise<WritingGoals> {
+    const value = await super.setDailyWordTarget(target);
+    this.persist();
+    return value;
+  }
 
   async saveDocument(documentId: string, document: StructuredDocument, expectedRevision: number): Promise<SaveDocumentResult> {
     try {
@@ -164,7 +179,13 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
 
   private loadState(): void {
     const row = this.database.prepare('SELECT state_json FROM project_state WHERE id = 1').get() as { state_json: string } | undefined;
-    if (row) this.state = JSON.parse(row.state_json) as any;
+    if (!row) return;
+    const value = JSON.parse(row.state_json) as any;
+    this.state = {
+      ...value,
+      styleProfile: { ...DEFAULT_EDITOR_STYLE, ...(value.styleProfile ?? {}) },
+      writingGoals: { dailyTarget: 500, dailyWordCounts: {}, ...(value.writingGoals ?? {}) }
+    };
   }
 
   private persist(): void {
