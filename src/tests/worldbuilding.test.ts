@@ -108,7 +108,7 @@ describe('offline persistence and accessible workspace', () => {
     expect(component).toContain('Canvas outline');
     expect(component).toContain('Keyboard-accessible list of every note node and resolved wiki-link edge.');
     expect(component).toContain('[[Note title|label]]');
-    expect(component).toContain('Create new note</button><button type="button" onClick={() => void createCanvas()}>Create new canva</button><button type="button" onClick={onReturnToManuscript}>Close');
+    expect(component).toContain('Create new note</button><button type="button" onClick={onCreateCanvas}>Create new canva</button><button type="button" onClick={onReturnToManuscript}>Close');
     expect(component).not.toContain('worldbuilding-nav');
     expect(component).not.toContain('Create typed relationship');
     expect(component).not.toContain('Anchored, not parsed');
@@ -116,6 +116,12 @@ describe('offline persistence and accessible workspace', () => {
     expect(app).toContain('Primary workspaces');
     expect(app).toContain('worldbuilding-sidebar-group');
     expect(app).toContain('worldbuildingTabs');
+    expect(app).toContain('worldbuilding-create-actions');
+    expect(app).toContain('Create new note</button><button type="button" onClick={createWorldbuildingCanvas}>Create new canva</button>');
     expect(app).toContain('onReturnToManuscript={() => setWorkspaceMode(\'writing\')}');
+    const styles = readFileSync(join(process.cwd(), 'src/app/styles.css'), 'utf8');
+    expect(styles).toContain('.worldbuilding-workspace { display: flex;');
+    expect(styles).toContain('.worldbuilding-main { display: flex; flex: 1; flex-direction: column;');
+    expect(styles).toContain('.worldbuilding-empty { display: flex; flex: 1; min-height: 0; width: 100%; flex-direction: column; align-items: center; justify-content: center;');
   });
 });
