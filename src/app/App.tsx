@@ -122,8 +122,10 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState('');
   const [autosaveStatus, setAutosaveStatus] = useState<AutosaveStatus>({ state: 'saved', message: 'All changes saved' });
+  const [pageContentWidth, setPageContentWidth] = useState<number>();
   const documentHeadRef = useRef<DocumentHead>();
   const editorDocumentRef = useRef(editorDocument);
+  const pageStackRef = useRef<HTMLDivElement>(null);
   const latestSaveRef = useRef<() => Promise<void>>(async () => undefined);
   documentHeadRef.current = documentHead;
   editorDocumentRef.current = editorDocument;
@@ -162,6 +164,19 @@ export default function App() {
       setDocumentHead(head); documentHeadRef.current = head; setEditorDocument(head.document); editorDocumentRef.current = head.document;
     }).catch(() => undefined);
   }, [mode, repository, scenes, selectedSceneId]);
+  useLayoutEffect(() => {
+    const element = pageStackRef.current;
+    if (!element) return;
+    const updateWidth = () => setPageContentWidth(element.clientWidth);
+    updateWidth();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', updateWidth);
+      return () => window.removeEventListener('resize', updateWidth);
+    }
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [snapshot, sidebarCollapsed]);
   useEffect(() => {
     const flush = () => { void autosave.flush(); };
     window.addEventListener('beforeunload', flush);
@@ -184,7 +199,7 @@ export default function App() {
     setSnapshot((current) => current ? { ...current, writingStats, status: result.status } : current);
   }, [mode, repository]);
   latestSaveRef.current = saveCurrentDocument;
-  const pages = useMemo<PaginatedPage[]>(() => paginateDocumentWithSources(editorDocument, styleProfile), [editorDocument, styleProfile]);
+  const pages = useMemo<PaginatedPage[]>(() => paginateDocumentWithSources(editorDocument, styleProfile, pageContentWidth), [editorDocument, styleProfile, pageContentWidth]);
   const updatePage = (pageIndex: number, page: StructuredDocument) => {
     const value = mergePaginatedDocument(editorDocumentRef.current, pages, pageIndex, page);
     editorDocumentRef.current = value;
@@ -243,7 +258,7 @@ export default function App() {
     <main className="workspace"><div className="workspace-head"><div><p className="eyebrow">{activeChapter?.title ?? 'Chapter'}</p><h1>{mode === 'continuous' ? 'Continuous draft' : mode === 'compose' ? 'Composed chapter' : activeScene?.title ?? 'Choose a scene'}</h1></div><div className="mode-switch"><button type="button" className={mode === 'scene' ? 'active' : ''} onClick={() => activeScene && selectScene(activeScene)}>Scenes</button><button type="button" className={mode === 'compose' ? 'active' : ''} onClick={compose}>Chapter view</button><button type="button" className={mode === 'continuous' ? 'active' : ''} onClick={openContinuous}>Continuous draft</button></div></div>
       {localError && <div className="inline-error" role="alert">{localError}</div>}
       <GoalPanel stats={snapshot.writingStats} onSaveTarget={updateGoal} />
-      <div className="page-stack" aria-label="Manuscript pages"><StyleControls profile={styleProfile} onChange={updateStyle} disabled={mode === 'compose'} />{pages.map((page, pageIndex) => <section className="paper-page" style={pageStyle} key={`${pageIndex}-${page.document.blocks[0]?.id ?? 'empty'}`}><div className="paper-meta"><span>{mode === 'compose' ? 'NON-DESTRUCTIVE COMPOSITION' : mode === 'continuous' ? 'SEPARATE REVISION · SOURCE SNAPSHOT PRESERVED' : 'SCENE DOCUMENT'}</span><span>{pageDimensions(styleProfile.pageSize).label} · Page {pageIndex + 1} of {pages.length}</span></div><Editor document={page.document} styleProfile={styleProfile} onChange={(value) => updatePage(pageIndex, value)} readOnly={mode === 'compose'} /><div className="paper-footer"><span>{mode === 'compose' ? 'Scene documents remain the source.' : 'Structured document · changes save automatically'}</span>{documentHead && pageIndex === pages.length - 1 && <span>revision {documentHead.revision}</span>}</div></section>)}</div>
+      <div className="page-stack" ref={pageStackRef} aria-label="Manuscript pages"><StyleControls profile={styleProfile} onChange={updateStyle} disabled={mode === 'compose'} />{pages.map((page, pageIndex) => <section className="paper-page" style={pageStyle} key={`${pageIndex}-${page.document.blocks[0]?.id ?? 'empty'}`}><div className="paper-meta"><span>{mode === 'compose' ? 'NON-DESTRUCTIVE COMPOSITION' : mode === 'continuous' ? 'SEPARATE REVISION · SOURCE SNAPSHOT PRESERVED' : 'SCENE DOCUMENT'}</span><span>{pageDimensions(styleProfile.pageSize).label} · Page {pageIndex + 1} of {pages.length}</span></div><Editor document={page.document} styleProfile={styleProfile} onChange={(value) => updatePage(pageIndex, value)} readOnly={mode === 'compose'} /><div className="paper-footer"><span>{mode === 'compose' ? 'Scene documents remain the source.' : 'Structured document · changes save automatically'}</span>{documentHead && pageIndex === pages.length - 1 && <span>revision {documentHead.revision}</span>}</div></section>)}</div>
       <footer className="editor-footer"><div>{mode === 'continuous' && <button type="button" className="secondary-button" onClick={returnToScenes}>Return to scenes</button>}{mode === 'scene' && activeScene && <><button type="button" className="secondary-button" onClick={() => renameScene(activeScene)}>Rename</button><button type="button" className="icon-button" onClick={() => moveScene(activeScene, -1)} aria-label="Move scene up">↑</button><button type="button" className="icon-button" onClick={() => moveScene(activeScene, 1)} aria-label="Move scene down">↓</button></>}{mode === 'compose' && <span className="guard-note">Composition is a view, never a second source.</span>}</div><div className="save-actions">{mode !== 'compose' && <button type="button" className="secondary-button" onClick={save} disabled={busy || !documentHead}>Save now</button>}</div></footer>
     </main>
     {showReturnChoices && <ChoiceDialog onSplit={split} onKeep={keepSeparate} onCancel={() => setShowReturnChoices(false)} busy={busy} />}

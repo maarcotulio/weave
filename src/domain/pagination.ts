@@ -43,7 +43,7 @@ function lineCount(text: string, charactersPerLine: number): number {
 }
 
 /** Split at a visual line boundary while preserving every source character. */
-function splitTextIntoChunks(text: string, charactersPerLine: number): string[] {
+function splitTextIntoLineChunks(text: string, charactersPerLine: number): string[] {
   if (!text.length) return [''];
   const chunks: string[] = [];
   let remaining = text;
@@ -84,18 +84,40 @@ function fragmentBlock(block: DocumentBlock, text: string, start: number, end: n
   };
 }
 
+function normalizePageFragments(pages: PaginatedPage[]): PaginatedPage[] {
+  const totals = new Map<string, number>();
+  pages.forEach((page) => page.document.blocks.forEach((candidate) => {
+    const metadata = (candidate as PaginatedBlock).pagination;
+    if (metadata) totals.set(metadata.sourceBlockId, (totals.get(metadata.sourceBlockId) ?? 0) + 1);
+  }));
+  return pages.map((page) => ({
+    document: {
+      formatVersion: page.document.formatVersion,
+      blocks: page.document.blocks.map((candidate) => {
+        const block = candidate as PaginatedBlock;
+        const metadata = block.pagination;
+        if (!metadata) return block;
+        const total = totals.get(metadata.sourceBlockId) ?? metadata.total;
+        return { ...block, id: total === 1 ? metadata.sourceBlockId : `${metadata.sourceBlockId}:page-${metadata.sequence + 1}`, pagination: { ...metadata, total } };
+      })
+    }
+  }));
+}
+
 /**
- * Build view pages and split oversized paragraphs by lines. The canonical
- * block remains whole; page fragments carry source offsets so edits can be
- * merged back before autosave.
+ * Build fixed-height view pages and split oversized paragraphs by visual lines.
+ * Fragments are sized with a conservative block allowance for toolbar, hint,
+ * and paragraph spacing, so their auto-sized editors fit the fixed page.
  */
-export function paginateDocumentWithSources(document: StructuredDocument, style: EditorStyleProfile): PaginatedPage[] {
+export function paginateDocumentWithSources(document: StructuredDocument, style: EditorStyleProfile, availableWidthPx?: number): PaginatedPage[] {
   const dimensions = pageDimensions(style.pageSize);
   const horizontalMargin = 144;
   const verticalMargin = 144;
   const chromeHeight = 74;
-  const contentWidth = dimensions.widthPx - horizontalMargin;
-  const charactersPerLine = Math.max(24, Math.floor(contentWidth / (style.fontSizePt * 0.54)));
+  const blockAllowance = Math.max(2, Math.ceil(40 / lineHeightFor(style)));
+  const renderedWidth = availableWidthPx ? Math.min(dimensions.widthPx, Math.max(horizontalMargin + 120, availableWidthPx)) : dimensions.widthPx;
+  const contentWidth = renderedWidth - horizontalMargin;
+  const charactersPerLine = Math.max(24, Math.floor(contentWidth / (style.fontSizePt * 0.62)));
   const linesPerPage = Math.max(8, Math.floor((dimensions.heightPx - verticalMargin - chromeHeight) / lineHeightFor(style)));
   const pages: PaginatedPage[] = [];
   let blocks: PaginatedBlock[] = [];
@@ -110,25 +132,46 @@ export function paginateDocumentWithSources(document: StructuredDocument, style:
 
   for (const block of document.blocks) {
     const text = blockText(block);
-    const chunks = block.kind === 'scene-break' ? [''] : splitTextIntoChunks(text, charactersPerLine);
+    const lineChunks = block.kind === 'scene-break' ? [''] : splitTextIntoLineChunks(text, charactersPerLine);
+    let lineChunkIndex = 0;
     let offset = 0;
-    chunks.forEach((chunk, sequence) => {
+    let sequence = 0;
+    while (lineChunkIndex < lineChunks.length) {
+      const headingAllowance = block.kind === 'heading' && sequence === 0 ? 1 : 0;
+      if (blocks.length && usedLines + blockAllowance + headingAllowance >= linesPerPage) pushPage();
+      const availableLines = Math.max(1, linesPerPage - usedLines - blockAllowance - headingAllowance);
+      let grouped = '';
+      let groupedLines = 0;
+      while (lineChunkIndex < lineChunks.length) {
+        const candidate = lineChunks[lineChunkIndex];
+        const candidateLines = block.kind === 'scene-break' ? 2 : lineCount(candidate, charactersPerLine);
+        if (grouped && groupedLines + candidateLines > availableLines) break;
+        grouped += candidate;
+        groupedLines += candidateLines;
+        lineChunkIndex += 1;
+        if (groupedLines >= availableLines) break;
+      }
+      if (!grouped && lineChunkIndex < lineChunks.length) {
+        grouped = lineChunks[lineChunkIndex];
+        groupedLines = block.kind === 'scene-break' ? 2 : lineCount(grouped, charactersPerLine);
+        lineChunkIndex += 1;
+      }
       const start = offset;
-      const end = offset + chunk.length;
+      const end = offset + grouped.length;
       offset = end;
-      const blockLines = block.kind === 'scene-break' ? 2 : lineCount(chunk, charactersPerLine) + (block.kind === 'heading' && sequence === 0 ? 1 : 0);
-      if (blocks.length && usedLines + blockLines > linesPerPage) pushPage();
-      blocks.push(fragmentBlock(block, chunk, start, end, sequence, chunks.length));
-      usedLines += blockLines;
-    });
+      blocks.push(fragmentBlock(block, grouped, start, end, sequence, 0));
+      sequence += 1;
+      usedLines += groupedLines + blockAllowance + headingAllowance;
+      if (lineChunkIndex < lineChunks.length) pushPage();
+    }
   }
   if (blocks.length || !pages.length) pushPage();
-  return pages.map((page) => ({ document: cloneDocument(page.document) }));
+  return normalizePageFragments(pages.map((page) => ({ document: cloneDocument(page.document) })));
 }
 
 /** Backwards-compatible view-only page documents. */
-export function paginateDocument(document: StructuredDocument, style: EditorStyleProfile): StructuredDocument[] {
-  return paginateDocumentWithSources(document, style).map((page) => page.document);
+export function paginateDocument(document: StructuredDocument, style: EditorStyleProfile, availableWidthPx?: number): StructuredDocument[] {
+  return paginateDocumentWithSources(document, style, availableWidthPx).map((page) => page.document);
 }
 
 function cleanFragment(block: PaginatedBlock): DocumentBlock {

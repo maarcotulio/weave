@@ -71,7 +71,7 @@ describe('writing style and goals', () => {
   it('splits one oversized paragraph across pages and merges edited fragments without loss', () => {
     const prose = Array.from({ length: 1800 }, (_, index) => `word${index}`).join(' ');
     const document = documentFromText(prose);
-    const style = { ...DEFAULT_EDITOR_STYLE, pageSize: 'letter' as const };
+    const style = { ...DEFAULT_EDITOR_STYLE, fontFamily: 'Georgia', fontSizePt: 24, lineSpacing: 'double' as const, pageSize: 'letter' as const };
     const pages = paginateDocument(document, style);
     const legalPages = paginateDocument(document, { ...style, pageSize: 'legal' });
     expect(pages.length).toBeGreaterThan(1);
