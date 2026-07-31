@@ -1,4 +1,5 @@
 import {
+  blockText,
   cloneDocument,
   documentFromText,
   emptyDocument,
@@ -25,6 +26,22 @@ import {
   type Story,
   type StructuredDocument,
   type EditorStyleProfile,
+  EntityRevisionConflictError,
+  type WorldbuildingItem,
+  type WorldbuildingItemKind,
+  type WorldbuildingProperties,
+  type RelationshipType,
+  RELATIONSHIP_TYPES,
+  type DomainRelationship,
+  type DocumentAnchor,
+  type DocumentLink,
+  type Backlink,
+  type StoryCanvas,
+  type CanvasPosition,
+  type CanvasViewport,
+  type CanvasNode,
+  type CanvasEdge,
+  type CanvasProjection,
   type WritingGoals,
   type WritingStats
 } from './types';
@@ -60,6 +77,25 @@ export interface ProjectRepository {
   listScenes(chapterId: string, sceneSetId?: string): Promise<Scene[]>;
   renameScene(sceneId: string, title: string): Promise<Scene>;
   reorderScene(sceneId: string, position: number): Promise<Scene[]>;
+  createWorldbuildingItem(input: { kind: WorldbuildingItemKind; title: string; aliases?: string[]; properties?: WorldbuildingProperties }): Promise<WorldbuildingItem>;
+  updateWorldbuildingItem(itemId: string, input: { title: string; aliases: string[]; properties: WorldbuildingProperties }, expectedRevision: number): Promise<WorldbuildingItem>;
+  deleteWorldbuildingItem(itemId: string, expectedRevision: number, mode?: 'reject' | 'remove-references'): Promise<void>;
+  listWorldbuildingItems(kind?: WorldbuildingItemKind): Promise<WorldbuildingItem[]>;
+  searchWorldbuilding(query: string): Promise<WorldbuildingItem[]>;
+  createRelationship(sourceId: string, targetId: string, type: RelationshipType): Promise<DomainRelationship>;
+  deleteRelationship(relationshipId: string): Promise<void>;
+  listRelationships(entityId?: string): Promise<DomainRelationship[]>;
+  listBacklinks(targetId: string): Promise<Backlink[]>;
+  createDocumentLink(anchor: DocumentAnchor, targetId?: string, unresolvedLabel?: string): Promise<DocumentLink>;
+  repairDocumentLink(linkId: string, targetId: string): Promise<DocumentLink>;
+  listDocumentLinks(documentId?: string): Promise<DocumentLink[]>;
+  createCanvas(storyId: string, title: string): Promise<StoryCanvas>;
+  listCanvases(storyId?: string): Promise<StoryCanvas[]>;
+  getCanvasProjection(canvasId: string): Promise<CanvasProjection>;
+  addCanvasNode(canvasId: string, entityId: string, position: CanvasPosition, expectedRevision: number): Promise<CanvasNode>;
+  removeCanvasNode(canvasId: string, nodeId: string, expectedRevision: number): Promise<void>;
+  connectCanvasNodes(canvasId: string, sourceNodeId: string, targetNodeId: string, relationshipId: string, expectedRevision: number): Promise<CanvasEdge>;
+  saveCanvasLayout(canvasId: string, positions: Array<{ id: string; position: CanvasPosition }>, viewport: CanvasViewport, expectedRevision: number): Promise<StoryCanvas>;
   getDocument(documentId: string): Promise<DocumentHead>;
   getRevision(revisionId: string): Promise<Revision>;
   saveDocument(documentId: string, document: StructuredDocument, expectedRevision: number): Promise<SaveDocumentResult>;
@@ -86,6 +122,8 @@ interface DocumentRecord {
   revisions: Revision[];
 }
 
+interface ResolvedEntity { id: string; title: string; kind: WorldbuildingItemKind | 'chapter' | 'scene'; }
+
 interface RepositoryState {
   project?: Project;
   stories: Story[];
@@ -95,6 +133,12 @@ interface RepositoryState {
   documents: DocumentRecord[];
   drafts: ContinuousDraft[];
   backups: BackupRecord[];
+  worldbuildingItems: WorldbuildingItem[];
+  relationships: DomainRelationship[];
+  documentLinks: DocumentLink[];
+  canvases: StoryCanvas[];
+  canvasNodes: CanvasNode[];
+  canvasEdges: CanvasEdge[];
   styleProfile: EditorStyleProfile;
   writingGoals: WritingGoals;
   status: OperationStatus;
@@ -120,6 +164,12 @@ export class InMemoryProjectRepository implements ProjectRepository {
     documents: [],
     drafts: [],
     backups: [],
+    worldbuildingItems: [],
+    relationships: [],
+    documentLinks: [],
+    canvases: [],
+    canvasNodes: [],
+    canvasEdges: [],
     styleProfile: { ...DEFAULT_EDITOR_STYLE },
     writingGoals: { dailyTarget: 500, dailyWordCounts: {} },
     status: initialStatus()
@@ -127,9 +177,9 @@ export class InMemoryProjectRepository implements ProjectRepository {
   protected backupStates = new Map<string, RepositoryState>();
 
   async createProject(directory: string, name: string): Promise<Project> {
-    this.state = { stories: [], chapters: [], sceneSets: [], scenes: [], documents: [], drafts: [], backups: [], styleProfile: { ...DEFAULT_EDITOR_STYLE }, writingGoals: { dailyTarget: 500, dailyWordCounts: {} }, status: initialStatus() };
+    this.state = { stories: [], chapters: [], sceneSets: [], scenes: [], documents: [], drafts: [], backups: [], worldbuildingItems: [], relationships: [], documentLinks: [], canvases: [], canvasNodes: [], canvasEdges: [], styleProfile: { ...DEFAULT_EDITOR_STYLE }, writingGoals: { dailyTarget: 500, dailyWordCounts: {} }, status: initialStatus() };
     this.backupStates.clear();
-    const project: Project = { id: newId('project'), name, directory, schemaVersion: 1, createdAt: now(), updatedAt: now() };
+    const project: Project = { id: newId('project'), name, directory, schemaVersion: 2, createdAt: now(), updatedAt: now() };
     this.state.project = project;
     this.state.status = { state: 'saved', message: 'Project created', at: now() };
     return deepClone(project);
@@ -208,6 +258,213 @@ export class InMemoryProjectRepository implements ProjectRepository {
     siblings.splice(bounded, 0, moved);
     siblings.forEach((item, index) => { item.position = index; });
     return deepClone(siblings);
+  }
+
+  async createWorldbuildingItem(input: { kind: WorldbuildingItemKind; title: string; aliases?: string[]; properties?: WorldbuildingProperties }): Promise<WorldbuildingItem> {
+    const project = await this.getProject();
+    this.validateWorldbuildingInput(input.kind, input.title, input.aliases ?? [], input.properties ?? {});
+    const item: WorldbuildingItem = {
+      id: newId('world-item'), projectId: project.id, kind: input.kind, title: input.title.trim(),
+      aliases: this.normalizedAliases(input.aliases ?? []), properties: deepClone(input.properties ?? {}), revision: 1,
+      createdAt: now(), updatedAt: now()
+    };
+    this.state.worldbuildingItems.push(item);
+    this.touchProject();
+    this.state.status = { state: 'saved', message: `${item.kind} saved`, at: now() };
+    return deepClone(item);
+  }
+
+  async updateWorldbuildingItem(itemId: string, input: { title: string; aliases: string[]; properties: WorldbuildingProperties }, expectedRevision: number): Promise<WorldbuildingItem> {
+    const item = this.requireWorldbuildingItem(itemId);
+    if (item.revision !== expectedRevision) throw this.entityConflict(item.id, expectedRevision, item.revision);
+    this.validateWorldbuildingInput(item.kind, input.title, input.aliases, input.properties);
+    item.title = input.title.trim();
+    item.aliases = this.normalizedAliases(input.aliases);
+    item.properties = deepClone(input.properties);
+    item.revision += 1;
+    item.updatedAt = now();
+    this.touchProject();
+    this.state.status = { state: 'saved', message: `${item.kind} saved`, at: now() };
+    return deepClone(item);
+  }
+
+  async deleteWorldbuildingItem(itemId: string, expectedRevision: number, mode: 'reject' | 'remove-references' = 'reject'): Promise<void> {
+    const item = this.requireWorldbuildingItem(itemId);
+    if (item.revision !== expectedRevision) throw this.entityConflict(item.id, expectedRevision, item.revision);
+    const relationships = this.state.relationships.filter((relationship) => relationship.sourceId === itemId || relationship.targetId === itemId);
+    const links = this.state.documentLinks.filter((link) => link.targetId === itemId);
+    const canvasNodes = this.state.canvasNodes.filter((node) => node.entityId === itemId);
+    if (mode === 'reject' && (relationships.length || links.length || canvasNodes.length)) {
+      throw new Error(`Cannot delete ${item.title}: ${relationships.length} relationship(s), ${links.length} document link(s), and ${canvasNodes.length} canvas node(s) still refer to it. Choose remove-references to keep unresolved links repairable.`);
+    }
+    if (mode === 'remove-references') {
+      const removedRelationshipIds = new Set(relationships.map((relationship) => relationship.id));
+      const removedNodeIds = new Set(canvasNodes.map((node) => node.id));
+      this.state.relationships = this.state.relationships.filter((relationship) => !removedRelationshipIds.has(relationship.id));
+      this.state.canvasEdges = this.state.canvasEdges.filter((edge) => !removedRelationshipIds.has(edge.relationshipId) && !removedNodeIds.has(edge.sourceNodeId) && !removedNodeIds.has(edge.targetNodeId));
+      this.state.canvasNodes = this.state.canvasNodes.filter((node) => !removedNodeIds.has(node.id));
+      this.state.documentLinks = this.state.documentLinks.map((link) => link.targetId === itemId ? { ...link, targetId: undefined, unresolvedLabel: item.title } : link);
+    }
+    this.state.worldbuildingItems = this.state.worldbuildingItems.filter((candidate) => candidate.id !== itemId);
+    this.touchProject();
+    this.state.status = { state: 'saved', message: `${item.title} deleted safely`, at: now() };
+  }
+
+  async listWorldbuildingItems(kind?: WorldbuildingItemKind): Promise<WorldbuildingItem[]> {
+    return deepClone(this.state.worldbuildingItems.filter((item) => !kind || item.kind === kind).sort((left, right) => left.title.localeCompare(right.title)));
+  }
+
+  async searchWorldbuilding(query: string): Promise<WorldbuildingItem[]> {
+    const needle = query.trim().toLocaleLowerCase();
+    if (!needle) return this.listWorldbuildingItems();
+    const linkedIds = new Set(this.state.relationships.filter((relationship) => {
+      const source = this.entityTitle(relationship.sourceId).toLocaleLowerCase();
+      const target = this.entityTitle(relationship.targetId).toLocaleLowerCase();
+      return source.includes(needle) || target.includes(needle) || relationship.type.includes(needle);
+    }).flatMap((relationship) => [relationship.sourceId, relationship.targetId]));
+    return deepClone(this.state.worldbuildingItems.filter((item) =>
+      item.title.toLocaleLowerCase().includes(needle) ||
+      item.aliases.some((alias) => alias.toLocaleLowerCase().includes(needle)) ||
+      Object.values(item.properties).some((value) => value?.toLocaleLowerCase().includes(needle)) ||
+      linkedIds.has(item.id)
+    ).sort((left, right) => left.title.localeCompare(right.title)));
+  }
+
+  async createRelationship(sourceId: string, targetId: string, type: RelationshipType): Promise<DomainRelationship> {
+    this.validateRelationship(sourceId, targetId, type);
+    const existing = this.state.relationships.find((relationship) => relationship.sourceId === sourceId && relationship.targetId === targetId && relationship.type === type);
+    if (existing) return deepClone(existing);
+    const relationship: DomainRelationship = { id: newId('relationship'), sourceId, targetId, type, createdAt: now() };
+    this.state.relationships.push(relationship);
+    this.touchProject();
+    this.state.status = { state: 'saved', message: 'Relationship saved', at: now() };
+    return deepClone(relationship);
+  }
+
+  async deleteRelationship(relationshipId: string): Promise<void> {
+    this.requireRelationship(relationshipId);
+    this.state.relationships = this.state.relationships.filter((relationship) => relationship.id !== relationshipId);
+    this.state.canvasEdges = this.state.canvasEdges.filter((edge) => edge.relationshipId !== relationshipId);
+    this.touchProject();
+    this.state.status = { state: 'saved', message: 'Relationship removed from links and canvases', at: now() };
+  }
+
+  async listRelationships(entityId?: string): Promise<DomainRelationship[]> {
+    return deepClone(this.state.relationships.filter((relationship) => !entityId || relationship.sourceId === entityId || relationship.targetId === entityId));
+  }
+
+  async listBacklinks(targetId: string): Promise<Backlink[]> {
+    this.requireEntity(targetId);
+    const relationships: Backlink[] = this.state.relationships.filter((relationship) => relationship.targetId === targetId).map((relationship) => ({
+      kind: 'relationship', id: relationship.id, sourceId: relationship.sourceId, sourceTitle: this.entityTitle(relationship.sourceId), type: relationship.type
+    }));
+    const documents: Backlink[] = this.state.documentLinks.filter((link) => link.targetId === targetId).map((link) => ({
+      kind: 'document', id: link.id, sourceId: link.anchor.documentId, sourceTitle: this.documentTitle(link.anchor.documentId), anchor: deepClone(link.anchor)
+    }));
+    return [...relationships, ...documents];
+  }
+
+  async createDocumentLink(anchor: DocumentAnchor, targetId?: string, unresolvedLabel?: string): Promise<DocumentLink> {
+    this.validateAnchor(anchor);
+    if (targetId) this.requireWorldbuildingItem(targetId);
+    if (!targetId && !unresolvedLabel?.trim()) throw new Error('An unresolved document link needs a visible label');
+    const link: DocumentLink = { id: newId('document-link'), anchor: deepClone(anchor), targetId, unresolvedLabel: targetId ? undefined : unresolvedLabel!.trim(), createdAt: now() };
+    this.state.documentLinks.push(link);
+    this.touchProject();
+    this.state.status = { state: 'saved', message: targetId ? 'Document link saved' : 'Unresolved document link saved for repair', at: now() };
+    return deepClone(link);
+  }
+
+  async repairDocumentLink(linkId: string, targetId: string): Promise<DocumentLink> {
+    const link = this.requireDocumentLink(linkId);
+    this.requireWorldbuildingItem(targetId);
+    link.targetId = targetId;
+    link.unresolvedLabel = undefined;
+    this.touchProject();
+    this.state.status = { state: 'saved', message: 'Document link repaired', at: now() };
+    return deepClone(link);
+  }
+
+  async listDocumentLinks(documentId?: string): Promise<DocumentLink[]> {
+    return deepClone(this.state.documentLinks.filter((link) => !documentId || link.anchor.documentId === documentId));
+  }
+
+  async createCanvas(storyId: string, title: string): Promise<StoryCanvas> {
+    this.requireStory(storyId);
+    if (!title.trim()) throw new Error('Canvas title is required');
+    const canvas: StoryCanvas = { id: newId('canvas'), storyId, title: title.trim(), viewport: { x: 0, y: 0, zoom: 1 }, revision: 1, createdAt: now(), updatedAt: now() };
+    this.state.canvases.push(canvas);
+    this.touchProject();
+    this.state.status = { state: 'saved', message: 'Story canvas saved', at: now() };
+    return deepClone(canvas);
+  }
+
+  async listCanvases(storyId?: string): Promise<StoryCanvas[]> {
+    return deepClone(this.state.canvases.filter((canvas) => !storyId || canvas.storyId === storyId).sort((left, right) => left.createdAt.localeCompare(right.createdAt)));
+  }
+
+  async getCanvasProjection(canvasId: string): Promise<CanvasProjection> {
+    const canvas = this.requireCanvas(canvasId);
+    const nodes = this.state.canvasNodes.filter((node) => node.canvasId === canvasId).map((node) => {
+      const entity = this.requireEntity(node.entityId);
+      return { ...deepClone(node), entityKind: entity.kind, label: entity.title };
+    });
+    return { canvas: deepClone(canvas), nodes, edges: deepClone(this.state.canvasEdges.filter((edge) => edge.canvasId === canvasId)) };
+  }
+
+  async addCanvasNode(canvasId: string, entityId: string, position: CanvasPosition, expectedRevision: number): Promise<CanvasNode> {
+    const canvas = this.requireCanvasRevision(canvasId, expectedRevision);
+    const entity = this.requireEntity(entityId);
+    if (entity.kind !== 'world' && !this.entityCanAppearOnStory(entityId, canvas.storyId)) throw new Error('Chapter and scene nodes must belong to this canvas story');
+    const existing = this.state.canvasNodes.find((node) => node.canvasId === canvasId && node.entityId === entityId);
+    if (existing) return deepClone(existing);
+    this.validatePosition(position);
+    const node: CanvasNode = { id: newId('canvas-node'), canvasId, entityId, position: deepClone(position) };
+    this.state.canvasNodes.push(node);
+    this.bumpCanvas(canvas);
+    this.state.status = { state: 'saved', message: 'Canvas node added', at: now() };
+    return deepClone(node);
+  }
+
+  async removeCanvasNode(canvasId: string, nodeId: string, expectedRevision: number): Promise<void> {
+    const canvas = this.requireCanvasRevision(canvasId, expectedRevision);
+    const node = this.state.canvasNodes.find((candidate) => candidate.id === nodeId && candidate.canvasId === canvasId);
+    if (!node) throw new Error(`Unknown canvas node ${nodeId}`);
+    this.state.canvasNodes = this.state.canvasNodes.filter((candidate) => candidate.id !== nodeId);
+    this.state.canvasEdges = this.state.canvasEdges.filter((edge) => edge.sourceNodeId !== nodeId && edge.targetNodeId !== nodeId);
+    this.bumpCanvas(canvas);
+    this.state.status = { state: 'saved', message: 'Canvas placement removed; domain data is unchanged', at: now() };
+  }
+
+  async connectCanvasNodes(canvasId: string, sourceNodeId: string, targetNodeId: string, relationshipId: string, expectedRevision: number): Promise<CanvasEdge> {
+    const canvas = this.requireCanvasRevision(canvasId, expectedRevision);
+    const source = this.requireCanvasNode(canvasId, sourceNodeId);
+    const target = this.requireCanvasNode(canvasId, targetNodeId);
+    const relationship = this.requireRelationship(relationshipId);
+    if (relationship.sourceId !== source.entityId || relationship.targetId !== target.entityId) throw new Error('Canvas edges must use a relationship whose stable source and target match the selected nodes');
+    const existing = this.state.canvasEdges.find((edge) => edge.canvasId === canvasId && edge.relationshipId === relationshipId && edge.sourceNodeId === sourceNodeId && edge.targetNodeId === targetNodeId);
+    if (existing) return deepClone(existing);
+    const edge: CanvasEdge = { id: newId('canvas-edge'), canvasId, sourceNodeId, targetNodeId, relationshipId };
+    this.state.canvasEdges.push(edge);
+    this.bumpCanvas(canvas);
+    this.state.status = { state: 'saved', message: 'Validated relationship added to canvas', at: now() };
+    return deepClone(edge);
+  }
+
+  async saveCanvasLayout(canvasId: string, positions: Array<{ id: string; position: CanvasPosition }>, viewport: CanvasViewport, expectedRevision: number): Promise<StoryCanvas> {
+    const canvas = this.requireCanvasRevision(canvasId, expectedRevision);
+    if (!Number.isFinite(viewport.x) || !Number.isFinite(viewport.y) || !Number.isFinite(viewport.zoom) || viewport.zoom <= 0) throw new Error('Canvas viewport is invalid');
+    const nodes = new Map(this.state.canvasNodes.filter((node) => node.canvasId === canvasId).map((node) => [node.id, node]));
+    for (const update of positions) {
+      const node = nodes.get(update.id);
+      if (!node) throw new Error(`Unknown canvas node ${update.id}`);
+      this.validatePosition(update.position);
+      node.position = deepClone(update.position);
+    }
+    canvas.viewport = deepClone(viewport);
+    this.bumpCanvas(canvas);
+    this.state.status = { state: 'saved', message: 'Canvas arrangement saved; domain content is unchanged', at: now() };
+    return deepClone(canvas);
   }
 
   async getDocument(documentId: string): Promise<DocumentHead> {
@@ -348,6 +605,23 @@ export class InMemoryProjectRepository implements ProjectRepository {
       for (const chapter of this.state.chapters) {
         if (!this.state.sceneSets.some((set) => set.id === chapter.activeSceneSetId && set.active)) throw new Error(`Chapter ${chapter.id} has no active scene set`);
       }
+      for (const relationship of this.state.relationships) this.validateRelationship(relationship.sourceId, relationship.targetId, relationship.type);
+      for (const link of this.state.documentLinks) {
+        this.validateAnchor(link.anchor);
+        if (link.targetId) this.requireWorldbuildingItem(link.targetId);
+        if (!link.targetId && !link.unresolvedLabel) throw new Error(`Document link ${link.id} has no target or repair label`);
+      }
+      for (const canvas of this.state.canvases) {
+        this.requireStory(canvas.storyId);
+        if (canvas.revision < 1) throw new Error(`Canvas ${canvas.id} has an invalid revision`);
+      }
+      for (const node of this.state.canvasNodes) { this.requireCanvas(node.canvasId); this.requireEntity(node.entityId); this.validatePosition(node.position); }
+      for (const edge of this.state.canvasEdges) {
+        const source = this.requireCanvasNode(edge.canvasId, edge.sourceNodeId);
+        const target = this.requireCanvasNode(edge.canvasId, edge.targetNodeId);
+        const relationship = this.requireRelationship(edge.relationshipId);
+        if (source.entityId !== relationship.sourceId || target.entityId !== relationship.targetId) throw new Error(`Canvas edge ${edge.id} does not match its relationship`);
+      }
       const report = { ok: true, message: 'Integrity check passed', checkedAt: now() };
       this.state.status = { state: 'saved', message: report.message, at: report.checkedAt };
       return report;
@@ -390,6 +664,10 @@ export class InMemoryProjectRepository implements ProjectRepository {
       sceneSets: deepClone(this.state.sceneSets),
       scenes: deepClone(this.state.scenes),
       continuousDrafts: deepClone(this.state.drafts),
+      worldbuildingItems: deepClone(this.state.worldbuildingItems),
+      relationships: deepClone(this.state.relationships),
+      documentLinks: deepClone(this.state.documentLinks),
+      canvases: deepClone(this.state.canvases),
       styleProfile: deepClone(this.state.styleProfile ?? DEFAULT_EDITOR_STYLE),
       writingStats: await this.getWritingStats(),
       status: deepClone(this.state.status)
@@ -422,6 +700,117 @@ export class InMemoryProjectRepository implements ProjectRepository {
     const record = { id, headRevision: 1, revisions: [revision] };
     this.state.documents.push(record);
     return record;
+  }
+
+  protected requireWorldbuildingItem(itemId: string): WorldbuildingItem {
+    const item = this.state.worldbuildingItems.find((candidate) => candidate.id === itemId);
+    if (!item) throw new Error(`Unknown worldbuilding item ${itemId}`);
+    return item;
+  }
+
+  protected requireRelationship(relationshipId: string): DomainRelationship {
+    const relationship = this.state.relationships.find((candidate) => candidate.id === relationshipId);
+    if (!relationship) throw new Error(`Unknown relationship ${relationshipId}`);
+    return relationship;
+  }
+
+  protected requireDocumentLink(linkId: string): DocumentLink {
+    const link = this.state.documentLinks.find((candidate) => candidate.id === linkId);
+    if (!link) throw new Error(`Unknown document link ${linkId}`);
+    return link;
+  }
+
+  protected requireCanvas(canvasId: string): StoryCanvas {
+    const canvas = this.state.canvases.find((candidate) => candidate.id === canvasId);
+    if (!canvas) throw new Error(`Unknown canvas ${canvasId}`);
+    return canvas;
+  }
+
+  protected requireCanvasRevision(canvasId: string, expectedRevision: number): StoryCanvas {
+    const canvas = this.requireCanvas(canvasId);
+    if (canvas.revision !== expectedRevision) throw this.entityConflict(canvasId, expectedRevision, canvas.revision);
+    return canvas;
+  }
+
+  protected requireCanvasNode(canvasId: string, nodeId: string): CanvasNode {
+    const node = this.state.canvasNodes.find((candidate) => candidate.canvasId === canvasId && candidate.id === nodeId);
+    if (!node) throw new Error(`Unknown canvas node ${nodeId}`);
+    return node;
+  }
+
+  protected requireEntity(entityId: string): ResolvedEntity {
+    const item = this.state.worldbuildingItems.find((candidate) => candidate.id === entityId);
+    if (item) return { id: item.id, title: item.title, kind: item.kind };
+    const chapter = this.state.chapters.find((candidate) => candidate.id === entityId);
+    if (chapter) return { id: chapter.id, title: chapter.title, kind: 'chapter' };
+    const scene = this.state.scenes.find((candidate) => candidate.id === entityId);
+    if (scene) return { id: scene.id, title: scene.title, kind: 'scene' };
+    throw new Error(`Unknown relationship entity ${entityId}`);
+  }
+
+  protected entityTitle(entityId: string): string { return this.requireEntity(entityId).title; }
+
+  protected documentTitle(documentId: string): string {
+    const scene = this.state.scenes.find((candidate) => candidate.documentId === documentId);
+    if (scene) return scene.title;
+    const draft = this.state.drafts.find((candidate) => candidate.documentId === documentId);
+    return draft ? 'Continuous draft' : 'Document';
+  }
+
+  protected validateWorldbuildingInput(kind: WorldbuildingItemKind, title: string, aliases: string[], properties: WorldbuildingProperties): void {
+    if (!['world', 'place', 'character', 'term'].includes(kind)) throw new Error('Unsupported worldbuilding item type');
+    if (!title.trim()) throw new Error('A title is required');
+    if (!Array.isArray(aliases)) throw new Error('Aliases must be a list');
+    if (!properties || typeof properties !== 'object' || Array.isArray(properties)) throw new Error('Structured properties are required');
+    const allowedProperties: Record<WorldbuildingItemKind, readonly string[]> = {
+      world: ['genre', 'era', 'summary'], place: ['placeType', 'region', 'description'],
+      character: ['role', 'pronouns', 'summary'], term: ['category', 'definition']
+    };
+    for (const [key, value] of Object.entries(properties)) {
+      if (!allowedProperties[kind].includes(key) || typeof value !== 'string') throw new Error('Unsupported structured property');
+    }
+  }
+
+  protected normalizedAliases(aliases: string[]): string[] {
+    return [...new Set(aliases.map((alias) => alias.trim()).filter(Boolean).map((alias) => alias.slice(0, 160)))];
+  }
+
+  protected validateRelationship(sourceId: string, targetId: string, type: RelationshipType): void {
+    if (sourceId === targetId) throw new Error('A relationship must connect two different items');
+    this.requireEntity(sourceId); this.requireEntity(targetId);
+    if (!(RELATIONSHIP_TYPES as readonly string[]).includes(type)) throw new Error('Unsupported relationship type');
+  }
+
+  protected validateAnchor(anchor: DocumentAnchor): void {
+    if (!Number.isInteger(anchor.start) || !Number.isInteger(anchor.end) || anchor.start < 0 || anchor.end < anchor.start) throw new Error('Document link offsets are invalid');
+    const record = this.requireDocument(anchor.documentId);
+    const block = record.revisions.at(-1)?.document.blocks.find((candidate) => candidate.id === anchor.blockId);
+    if (!block || anchor.end > blockText(block).length) throw new Error('Document link anchor does not point to the current structured document');
+  }
+
+  protected validatePosition(position: CanvasPosition): void {
+    if (!Number.isFinite(position.x) || !Number.isFinite(position.y)) throw new Error('Canvas position is invalid');
+  }
+
+  protected entityCanAppearOnStory(entityId: string, storyId: string): boolean {
+    const chapter = this.state.chapters.find((candidate) => candidate.id === entityId);
+    if (chapter) return chapter.storyId === storyId;
+    const scene = this.state.scenes.find((candidate) => candidate.id === entityId);
+    if (!scene) return true;
+    const set = this.state.sceneSets.find((candidate) => candidate.id === scene.sceneSetId);
+    const sceneChapter = set && this.state.chapters.find((candidate) => candidate.id === set.chapterId);
+    return sceneChapter?.storyId === storyId;
+  }
+
+  protected bumpCanvas(canvas: StoryCanvas): void {
+    canvas.revision += 1;
+    canvas.updatedAt = now();
+    this.touchProject();
+  }
+
+  protected entityConflict(entityId: string, expectedRevision: number, currentRevision: number): EntityRevisionConflictError {
+    this.state.status = { state: 'revision-conflict', message: 'Save stopped: this item changed elsewhere', at: now() };
+    return new EntityRevisionConflictError(entityId, expectedRevision, currentRevision);
   }
 
   protected requireStory(storyId: string): Story {

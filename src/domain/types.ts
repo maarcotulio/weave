@@ -87,6 +87,103 @@ export interface Scene {
   documentId: string;
 }
 
+/** Typed, local-only worldbuilding records. Their IDs, rather than titles, are link targets. */
+export type WorldbuildingItemKind = 'world' | 'place' | 'character' | 'term';
+
+export interface WorldProperties { genre?: string; era?: string; summary?: string; }
+export interface PlaceProperties { placeType?: string; region?: string; description?: string; }
+export interface CharacterProperties { role?: string; pronouns?: string; summary?: string; }
+export interface TermProperties { category?: string; definition?: string; }
+export type WorldbuildingProperties = WorldProperties | PlaceProperties | CharacterProperties | TermProperties;
+
+export interface WorldbuildingItem {
+  id: string;
+  projectId: string;
+  kind: WorldbuildingItemKind;
+  title: string;
+  aliases: string[];
+  properties: WorldbuildingProperties;
+  /** Optimistic-concurrency revision for structured worldbuilding edits. */
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const RELATIONSHIP_TYPES = [
+  'contains', 'located-in', 'appears-in', 'knows', 'allied-with', 'opposes', 'mentions', 'related-to'
+] as const;
+export type RelationshipType = typeof RELATIONSHIP_TYPES[number];
+
+/** Source and target can be worldbuilding items, chapters, or scenes. */
+export interface DomainRelationship {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  type: RelationshipType;
+  createdAt: string;
+}
+
+export interface DocumentAnchor {
+  documentId: string;
+  blockId: string;
+  start: number;
+  end: number;
+}
+
+/** Explicit editor-created links only; prose is never heuristically parsed. */
+export interface DocumentLink {
+  id: string;
+  anchor: DocumentAnchor;
+  targetId?: string;
+  /** Retained when a target is removed so it is visible and repairable. */
+  unresolvedLabel?: string;
+  createdAt: string;
+}
+
+export type Backlink =
+  | { kind: 'relationship'; id: string; sourceId: string; sourceTitle: string; type: RelationshipType }
+  | { kind: 'document'; id: string; sourceId: string; sourceTitle: string; anchor: DocumentAnchor };
+
+export interface CanvasViewport { x: number; y: number; zoom: number; }
+export interface CanvasPosition { x: number; y: number; }
+export interface StoryCanvas {
+  id: string;
+  storyId: string;
+  title: string;
+  viewport: CanvasViewport;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A placement only: it never stores or mutates entity labels or content. */
+export interface CanvasNode {
+  id: string;
+  canvasId: string;
+  entityId: string;
+  position: CanvasPosition;
+}
+
+/** Edges reference validated relationship records, never copied labels. */
+export interface CanvasEdge {
+  id: string;
+  canvasId: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+  relationshipId: string;
+}
+
+export interface CanvasProjectionNode extends CanvasNode {
+  entityKind: WorldbuildingItemKind | 'chapter' | 'scene';
+  label: string;
+}
+
+export interface CanvasProjection {
+  canvas: StoryCanvas;
+  nodes: CanvasProjectionNode[];
+  edges: CanvasEdge[];
+}
+
 export interface Revision {
   id: string;
   documentId: string;
@@ -159,6 +256,10 @@ export interface ProjectSnapshot {
   sceneSets: SceneSet[];
   scenes: Scene[];
   continuousDrafts: ContinuousDraft[];
+  worldbuildingItems: WorldbuildingItem[];
+  relationships: DomainRelationship[];
+  documentLinks: DocumentLink[];
+  canvases: StoryCanvas[];
   styleProfile: EditorStyleProfile;
   writingStats: WritingStats;
   status: OperationStatus;
@@ -189,6 +290,18 @@ export class RevisionConflictError extends Error {
   constructor(documentId: string, expectedRevision: number, currentRevision: number) {
     super(`Document ${documentId} changed: expected revision ${expectedRevision}, current revision ${currentRevision}`);
     this.name = 'RevisionConflictError';
+    this.expectedRevision = expectedRevision;
+    this.currentRevision = currentRevision;
+  }
+}
+
+export class EntityRevisionConflictError extends Error {
+  readonly currentRevision: number;
+  readonly expectedRevision: number;
+
+  constructor(entityId: string, expectedRevision: number, currentRevision: number) {
+    super(`Entity ${entityId} changed: expected revision ${expectedRevision}, current revision ${currentRevision}`);
+    this.name = 'EntityRevisionConflictError';
     this.expectedRevision = expectedRevision;
     this.currentRevision = currentRevision;
   }

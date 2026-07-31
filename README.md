@@ -1,6 +1,6 @@
-# Weave Phase 1
+# Weave
 
-Weave is an offline desktop writing vertical slice. It uses a React/TypeScript renderer behind a narrow typed Tauri command boundary and keeps each project in a visible `<project>/.weave/` directory (`project.db`, `files/`, `backups/`, and `exports/`). No server, network, Docker process, or cloud service is required.
+Weave is an offline desktop writing and worldbuilding app. It uses a React/TypeScript renderer behind a narrow typed Tauri command boundary and keeps each project in a visible `<project>/.weave/` directory (`project.db`, `files/`, `backups/`, and `exports/`). No server, network, Docker process, or cloud service is required.
 
 ## Run
 
@@ -41,10 +41,18 @@ The first launch can create or open a project directory. The starter project con
 - `src/app/` — renderer only; it calls repository use cases and never reads SQL/files.
 - `src-tauri/` — SQLite-backed desktop command implementation and filesystem safeguards.
 
+## Worldbuilding and story graph
+
+- Worlds, places/cities, characters, and terms have typed local properties and aliases. Relationships use stable IDs, so renaming updates every projection without breaking links.
+- Outgoing links and backlinks combine typed domain relationships with explicit document anchors. Weave does not infer links by parsing prose. Deleting a referenced item is refused by default; the explicit **remove references** path removes relationships/canvas placements and leaves document links visibly unresolved for repair.
+- Search is entirely local and covers titles, aliases, typed properties/terms, and relationship context.
+- Each story can have a React Flow graph. `@xyflow/react` is pinned to **12.11.2** in `package.json`/`package-lock.json`; it is the only canvas dependency. Run `npm audit --omit=dev` when updating it (the production dependency audit was clean at this pin).
+- Canvas node positions and viewport are persisted separately from entities. Nodes project current domain labels; relationship edges reference validated relationship IDs. A keyboard-accessible outline lists every graph node and edge, while the graph supports focus, Delete placement removal, and Home-to-fit.
+
 ## Future roadmap
 
 - Dark mode is planned as a future feature; the current writing palette remains intentionally light.
 
 ## Scope and assumptions
 
-This slice intentionally excludes worldbuilding, React Flow, collaboration, sync, plugins, and runtime Docker. The desktop file picker is represented by the smallest local path prompt in this slice; a native picker can replace that UI without changing the repository boundary. The editorial export writer is local-only and deterministic rather than a cloud or office conversion service.
+This local-only app intentionally excludes collaboration, sync, plugins, arbitrary schemas, AI extraction, hosted services, runtime Docker, general-purpose drawing tools, and any second/freeform canvas. The desktop file picker is represented by the smallest local path prompt in this slice; a native picker can replace that UI without changing the repository boundary. The editorial export writer is local-only and deterministic rather than a cloud or office conversion service.

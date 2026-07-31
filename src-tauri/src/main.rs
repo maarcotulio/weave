@@ -27,6 +27,48 @@ struct SceneSet { id: String, chapter_id: String, created_at: String, #[serde(sk
 struct Scene { id: String, scene_set_id: String, title: String, position: i64, document_id: String }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct WorldbuildingItem { id: String, project_id: String, kind: String, title: String, #[serde(default)] aliases: Vec<String>, #[serde(default)] properties: serde_json::Value, revision: i64, created_at: String, updated_at: String }
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorldbuildingInput { #[serde(default)] kind: String, title: String, #[serde(default)] aliases: Vec<String>, #[serde(default = "empty_properties")] properties: serde_json::Value }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DomainRelationship { id: String, source_id: String, target_id: String, #[serde(rename = "type")] relation_type: String, created_at: String }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentAnchor { document_id: String, block_id: String, start: i64, end: i64 }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentLink { id: String, anchor: DocumentAnchor, #[serde(skip_serializing_if = "Option::is_none")] target_id: Option<String>, #[serde(skip_serializing_if = "Option::is_none")] unresolved_label: Option<String>, created_at: String }
+#[derive(Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum Backlink { Relationship { id: String, source_id: String, source_title: String, #[serde(rename = "type")] relation_type: String }, Document { id: String, source_id: String, source_title: String, anchor: DocumentAnchor } }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CanvasViewport { x: f64, y: f64, zoom: f64 }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CanvasPosition { x: f64, y: f64 }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoryCanvas { id: String, story_id: String, title: String, viewport: CanvasViewport, revision: i64, created_at: String, updated_at: String }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CanvasNode { id: String, canvas_id: String, entity_id: String, position: CanvasPosition }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CanvasEdge { id: String, canvas_id: String, source_node_id: String, target_node_id: String, relationship_id: String }
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CanvasProjectionNode { id: String, canvas_id: String, entity_id: String, position: CanvasPosition, entity_kind: String, label: String }
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CanvasProjection { canvas: StoryCanvas, nodes: Vec<CanvasProjectionNode>, edges: Vec<CanvasEdge> }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CanvasPositionUpdate { id: String, position: CanvasPosition }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct TextRun { text: String, marks: Vec<String> }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -62,13 +104,14 @@ struct WritingStats { date: String, daily_target: i64, daily_words: i64, project
 #[serde(rename_all = "camelCase")]
 struct Store {
     project: Option<Project>, stories: Vec<Story>, chapters: Vec<Chapter>, scene_sets: Vec<SceneSet>, scenes: Vec<Scene>, documents: Vec<DocumentRecord>, drafts: Vec<ContinuousDraft>, backups: Vec<BackupRecord>,
+    #[serde(default)] worldbuilding_items: Vec<WorldbuildingItem>, #[serde(default)] relationships: Vec<DomainRelationship>, #[serde(default)] document_links: Vec<DocumentLink>, #[serde(default)] canvases: Vec<StoryCanvas>, #[serde(default)] canvas_nodes: Vec<CanvasNode>, #[serde(default)] canvas_edges: Vec<CanvasEdge>,
     #[serde(default = "default_style_profile")] style_profile: EditorStyleProfile,
     #[serde(default = "default_writing_goals")] writing_goals: WritingGoals,
     status: OperationStatus,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ProjectSnapshot { project: Project, stories: Vec<Story>, chapters: Vec<Chapter>, scene_sets: Vec<SceneSet>, scenes: Vec<Scene>, continuous_drafts: Vec<ContinuousDraft>, style_profile: EditorStyleProfile, writing_stats: WritingStats, status: OperationStatus }
+struct ProjectSnapshot { project: Project, stories: Vec<Story>, chapters: Vec<Chapter>, scene_sets: Vec<SceneSet>, scenes: Vec<Scene>, continuous_drafts: Vec<ContinuousDraft>, worldbuilding_items: Vec<WorldbuildingItem>, relationships: Vec<DomainRelationship>, document_links: Vec<DocumentLink>, canvases: Vec<StoryCanvas>, style_profile: EditorStyleProfile, writing_stats: WritingStats, status: OperationStatus }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DocumentHead { document_id: String, document: Document, revision: i64, revision_id: String }
@@ -82,11 +125,12 @@ struct IntegrityReport { ok: bool, message: String, checked_at: String }
 #[serde(rename_all = "camelCase")]
 struct SplitResult { scene_set: SceneSet, scenes: Vec<Scene>, source_revision_id: String }
 
+fn empty_properties() -> serde_json::Value { serde_json::json!({}) }
 fn default_page_size() -> String { "letter".into() }
 fn default_style_profile() -> EditorStyleProfile { EditorStyleProfile { font_family: "Times New Roman".into(), font_size_pt: 12.0, line_spacing: "double".into(), page_size: default_page_size() } }
 fn default_writing_goals() -> WritingGoals { WritingGoals { daily_target: 500, daily_word_counts: std::collections::HashMap::new() } }
 impl Default for OperationStatus { fn default() -> Self { Self { state: "idle".into(), message: "Ready".into(), at: timestamp() } } }
-impl Default for Store { fn default() -> Self { Self { project: None, stories: vec![], chapters: vec![], scene_sets: vec![], scenes: vec![], documents: vec![], drafts: vec![], backups: vec![], style_profile: default_style_profile(), writing_goals: default_writing_goals(), status: OperationStatus::default() } } }
+impl Default for Store { fn default() -> Self { Self { project: None, stories: vec![], chapters: vec![], scene_sets: vec![], scenes: vec![], documents: vec![], drafts: vec![], backups: vec![], worldbuilding_items: vec![], relationships: vec![], document_links: vec![], canvases: vec![], canvas_nodes: vec![], canvas_edges: vec![], style_profile: default_style_profile(), writing_goals: default_writing_goals(), status: OperationStatus::default() } } }
 
 struct AppState { root: Option<PathBuf>, store: Store }
 impl Default for AppState { fn default() -> Self { Self { root: None, store: Store::default() } } }
@@ -110,6 +154,7 @@ fn database_for(root: &Path) -> Result<PathBuf, String> {
     let connection = Connection::open(&db).map_err(|e| e.to_string())?;
     connection.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS project_state(id INTEGER PRIMARY KEY CHECK(id=1), state_json TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS backups(id TEXT PRIMARY KEY, path TEXT NOT NULL, created_at TEXT NOT NULL, integrity TEXT NOT NULL, state_json TEXT NOT NULL);").map_err(|e| e.to_string())?;
     connection.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, ?1)", params![timestamp()]).map_err(|e| e.to_string())?;
+    connection.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, ?1)", params![timestamp()]).map_err(|e| e.to_string())?;
     Ok(db)
 }
 fn load_store(db: &Path) -> Result<Store, String> {
@@ -125,6 +170,31 @@ fn document_record<'a>(store: &'a Store, key: &str) -> Result<&'a DocumentRecord
 fn document_mut<'a>(store: &'a mut Store, key: &str) -> Result<&'a mut DocumentRecord, String> { store.documents.iter_mut().find(|item| item.id == key).ok_or_else(|| format!("Unknown document {key}")) }
 fn draft<'a>(store: &'a Store, key: &str) -> Result<&'a ContinuousDraft, String> { store.drafts.iter().find(|item| item.id == key).ok_or_else(|| format!("Unknown draft {key}")) }
 fn draft_mut<'a>(store: &'a mut Store, key: &str) -> Result<&'a mut ContinuousDraft, String> { store.drafts.iter_mut().find(|item| item.id == key).ok_or_else(|| format!("Unknown draft {key}")) }
+fn worldbuilding_item<'a>(store: &'a Store, key: &str) -> Result<&'a WorldbuildingItem, String> { store.worldbuilding_items.iter().find(|item| item.id == key).ok_or_else(|| format!("Unknown worldbuilding item {key}")) }
+fn relationship<'a>(store: &'a Store, key: &str) -> Result<&'a DomainRelationship, String> { store.relationships.iter().find(|item| item.id == key).ok_or_else(|| format!("Unknown relationship {key}")) }
+fn canvas<'a>(store: &'a Store, key: &str) -> Result<&'a StoryCanvas, String> { store.canvases.iter().find(|item| item.id == key).ok_or_else(|| format!("Unknown canvas {key}")) }
+fn canvas_node<'a>(store: &'a Store, canvas_id: &str, key: &str) -> Result<&'a CanvasNode, String> { store.canvas_nodes.iter().find(|item| item.canvas_id == canvas_id && item.id == key).ok_or_else(|| format!("Unknown canvas node {key}")) }
+fn entity(store: &Store, key: &str) -> Result<(String, String), String> {
+    if let Some(item) = store.worldbuilding_items.iter().find(|item| item.id == key) { return Ok((item.kind.clone(), item.title.clone())); }
+    if let Some(item) = store.chapters.iter().find(|item| item.id == key) { return Ok(("chapter".into(), item.title.clone())); }
+    if let Some(item) = store.scenes.iter().find(|item| item.id == key) { return Ok(("scene".into(), item.title.clone())); }
+    Err(format!("Unknown relationship entity {key}"))
+}
+fn relationship_type(value: &str) -> bool { ["contains", "located-in", "appears-in", "knows", "allied-with", "opposes", "mentions", "related-to"].contains(&value) }
+fn validate_relationship(store: &Store, source_id: &str, target_id: &str, relation_type: &str) -> Result<(), String> { if source_id == target_id { return Err("A relationship must connect two different items".into()); } entity(store, source_id)?; entity(store, target_id)?; if !relationship_type(relation_type) { return Err("Unsupported relationship type".into()); } Ok(()) }
+fn validate_properties(kind: &str, title: &str, aliases: &[String], properties: &serde_json::Value) -> Result<(), String> {
+    if !["world", "place", "character", "term"].contains(&kind) { return Err("Unsupported worldbuilding item type".into()); }
+    if title.trim().is_empty() { return Err("A title is required".into()); }
+    if aliases.iter().any(|alias| alias.trim().is_empty()) { return Err("Aliases cannot be empty".into()); }
+    let fields = properties.as_object().ok_or_else(|| "Structured properties are required".to_string())?;
+    let allowed: &[&str] = match kind { "world" => &["genre", "era", "summary"], "place" => &["placeType", "region", "description"], "character" => &["role", "pronouns", "summary"], "term" => &["category", "definition"], _ => &[] };
+    for (key, value) in fields { if !allowed.contains(&key.as_str()) || !value.is_string() { return Err("Unsupported structured property".into()); } }
+    Ok(())
+}
+fn validate_anchor(store: &Store, anchor: &DocumentAnchor) -> Result<(), String> { if anchor.start < 0 || anchor.end < anchor.start { return Err("Document link offsets are invalid".into()); } let record = document_record(store, &anchor.document_id)?; let document = record.revisions.last().ok_or_else(|| "Document has no revision".to_string())?; let block = document.document.blocks.iter().find(|block| block.id == anchor.block_id).ok_or_else(|| "Document link anchor does not point to the current structured document".to_string())?; if anchor.end as usize > block_text(block).encode_utf16().count() { return Err("Document link anchor does not point to the current structured document".into()); } Ok(()) }
+fn document_title(store: &Store, document_id: &str) -> String { if let Some(scene) = store.scenes.iter().find(|scene| scene.document_id == document_id) { return scene.title.clone(); } if store.drafts.iter().any(|draft| draft.document_id == document_id) { return "Continuous draft".into(); } "Document".into() }
+fn valid_position(position: &CanvasPosition) -> bool { position.x.is_finite() && position.y.is_finite() }
+fn entity_in_story(store: &Store, entity_id: &str, story_id: &str) -> bool { if let Some(chapter) = store.chapters.iter().find(|chapter| chapter.id == entity_id) { return chapter.story_id == story_id; } if let Some(scene) = store.scenes.iter().find(|scene| scene.id == entity_id) { return store.scene_sets.iter().find(|set| set.id == scene.scene_set_id).and_then(|set| store.chapters.iter().find(|chapter| chapter.id == set.chapter_id)).map(|chapter| chapter.story_id == story_id).unwrap_or(false); } true }
 fn empty_document() -> Document { Document { format_version: DOCUMENT_FORMAT_VERSION, blocks: vec![DocumentBlock { id: id("block"), kind: "paragraph".into(), heading_level: None, alignment: None, runs: vec![TextRun { text: String::new(), marks: vec![] }] }] } }
 fn validate_document(value: &Document) -> Result<(), String> { if value.format_version != DOCUMENT_FORMAT_VERSION { return Err("Unsupported document format".into()); } for block in &value.blocks { if !["paragraph", "heading", "scene-break"].contains(&block.kind.as_str()) { return Err("Unsupported block kind".into()); } } Ok(()) }
 fn block_text(block: &DocumentBlock) -> String { block.runs.iter().map(|run| run.text.as_str()).collect() }
@@ -145,10 +215,10 @@ fn active_scenes(store: &Store, chapter_id: &str, set_id: &str) -> Vec<Scene> { 
 fn compose(store: &Store, chapter_id: &str) -> Result<Document, String> { let current = chapter(store, chapter_id)?; let scenes = active_scenes(store, chapter_id, &current.active_scene_set_id); let mut blocks = vec![]; for (index, scene) in scenes.iter().enumerate() { if index > 0 { blocks.push(DocumentBlock { id: id("scene-break"), kind: "scene-break".into(), heading_level: None, alignment: None, runs: vec![TextRun { text: String::new(), marks: vec![] }] }); } let record = document_record(store, &scene.document_id)?; let revision = record.revisions.last().ok_or_else(|| "Document has no revision".to_string())?; blocks.extend(revision.document.blocks.clone()); } Ok(Document { format_version: DOCUMENT_FORMAT_VERSION, blocks }) }
 
 #[tauri::command]
-fn create_project(directory: String, name: String, app: State<'_, Mutex<AppState>>) -> Result<Project, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let root = PathBuf::from(&directory); let _ = database_for(&root)?; state.root = Some(root); let project = Project { id: id("project"), name, directory, schema_version: 1, created_at: timestamp(), updated_at: timestamp() }; state.store = Store::default(); state.store.project = Some(project.clone()); status(&mut state, "saved", "Project created offline"); state.persist()?; Ok(project) }
+fn create_project(directory: String, name: String, app: State<'_, Mutex<AppState>>) -> Result<Project, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let root = PathBuf::from(&directory); let _ = database_for(&root)?; state.root = Some(root); let project = Project { id: id("project"), name, directory, schema_version: 2, created_at: timestamp(), updated_at: timestamp() };  state.store = Store::default(); state.store.project = Some(project.clone()); status(&mut state, "saved", "Project created offline"); state.persist()?; Ok(project) }
 
 #[tauri::command]
-fn open_project(directory: String, app: State<'_, Mutex<AppState>>) -> Result<Project, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let root = PathBuf::from(&directory); let db = database_for(&root)?; state.store = load_store(&db)?; state.root = Some(root); let project = state.store.project.clone().ok_or_else(|| "Project metadata is missing".to_string())?; status(&mut state, "saved", "Project opened offline"); state.persist()?; Ok(project) }
+fn open_project(directory: String, app: State<'_, Mutex<AppState>>) -> Result<Project, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let root = PathBuf::from(&directory); let db = database_for(&root)?; state.store = load_store(&db)?; state.root = Some(root); if let Some(project) = state.store.project.as_mut() { project.schema_version = project.schema_version.max(2); } let project = state.store.project.clone().ok_or_else(|| "Project metadata is missing".to_string())?; status(&mut state, "saved", "Project opened offline"); state.persist()?; Ok(project) }
 #[tauri::command]
 fn get_project(app: State<'_, Mutex<AppState>>) -> Result<Project, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; state.store.project.clone().ok_or_else(|| "No project is open".into()) }
 #[tauri::command]
@@ -169,6 +239,86 @@ fn list_scenes(chapter_id: String, scene_set_id: Option<String>, app: State<'_, 
 fn rename_scene(scene_id: String, title: String, app: State<'_, Mutex<AppState>>) -> Result<Scene, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let scene = state.store.scenes.iter_mut().find(|item| item.id == scene_id).ok_or_else(|| "Unknown scene".to_string())?; scene.title = title; let result = scene.clone(); state.persist()?; Ok(result) }
 #[tauri::command]
 fn reorder_scene(scene_id: String, position: i64, app: State<'_, Mutex<AppState>>) -> Result<Vec<Scene>, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let set_id = state.store.scenes.iter().find(|item| item.id == scene_id).ok_or_else(|| "Unknown scene".to_string())?.scene_set_id.clone(); let mut values: Vec<Scene> = state.store.scenes.iter().filter(|item| item.scene_set_id == set_id).cloned().collect(); values.sort_by_key(|item| item.position); let from = values.iter().position(|item| item.id == scene_id).ok_or_else(|| "Unknown scene".to_string())?; let moved = values.remove(from); let target = position.max(0).min(values.len() as i64) as usize; values.insert(target, moved); for (index, value) in values.iter().enumerate() { if let Some(original) = state.store.scenes.iter_mut().find(|item| item.id == value.id) { original.position = index as i64; } } state.persist()?; Ok(values.into_iter().enumerate().map(|(index, mut value)| { value.position = index as i64; value }).collect()) }
+
+#[tauri::command]
+fn create_worldbuilding_item(input: WorldbuildingInput, app: State<'_, Mutex<AppState>>) -> Result<WorldbuildingItem, String> {
+    validate_properties(&input.kind, &input.title, &input.aliases, &input.properties)?;
+    let mut state = app.lock().map_err(|_| "Project lock poisoned")?;
+    let project = state.store.project.clone().ok_or_else(|| "No project is open".to_string())?;
+    let mut aliases: Vec<String> = input.aliases.into_iter().map(|alias| alias.trim().to_string()).filter(|alias| !alias.is_empty()).collect(); aliases.sort(); aliases.dedup();
+    let value = WorldbuildingItem { id: id("world-item"), project_id: project.id, kind: input.kind, title: input.title.trim().into(), aliases, properties: input.properties, revision: 1, created_at: timestamp(), updated_at: timestamp() };
+    state.store.worldbuilding_items.push(value.clone()); status(&mut state, "saved", "Worldbuilding item saved"); state.persist()?; Ok(value)
+}
+#[tauri::command]
+fn update_worldbuilding_item(item_id: String, input: WorldbuildingInput, expected_revision: i64, app: State<'_, Mutex<AppState>>) -> Result<WorldbuildingItem, String> {
+    let mut state = app.lock().map_err(|_| "Project lock poisoned")?;
+    let current = worldbuilding_item(&state.store, &item_id)?.clone();
+    validate_properties(&current.kind, &input.title, &input.aliases, &input.properties)?;
+    if current.revision != expected_revision { status(&mut state, "revision-conflict", "Save stopped: this item changed elsewhere"); state.persist()?; return Err(format!("Revision conflict: expected {expected_revision}, current {}", current.revision)); }
+    let item = state.store.worldbuilding_items.iter_mut().find(|item| item.id == item_id).ok_or_else(|| "Unknown worldbuilding item".to_string())?;
+    let mut aliases: Vec<String> = input.aliases.into_iter().map(|alias| alias.trim().to_string()).filter(|alias| !alias.is_empty()).collect(); aliases.sort(); aliases.dedup();
+    item.title = input.title.trim().into(); item.aliases = aliases; item.properties = input.properties; item.revision += 1; item.updated_at = timestamp(); let value = item.clone(); status(&mut state, "saved", "Worldbuilding item saved"); state.persist()?; Ok(value)
+}
+#[tauri::command]
+fn delete_worldbuilding_item(item_id: String, expected_revision: i64, mode: Option<String>, app: State<'_, Mutex<AppState>>) -> Result<(), String> {
+    let mut state = app.lock().map_err(|_| "Project lock poisoned")?;
+    let item = worldbuilding_item(&state.store, &item_id)?.clone();
+    if item.revision != expected_revision { status(&mut state, "revision-conflict", "Save stopped: this item changed elsewhere"); state.persist()?; return Err(format!("Revision conflict: expected {expected_revision}, current {}", item.revision)); }
+    let relationships: Vec<String> = state.store.relationships.iter().filter(|value| value.source_id == item_id || value.target_id == item_id).map(|value| value.id.clone()).collect();
+    let nodes: Vec<String> = state.store.canvas_nodes.iter().filter(|value| value.entity_id == item_id).map(|value| value.id.clone()).collect();
+    let links = state.store.document_links.iter().filter(|value| value.target_id.as_deref() == Some(&item_id)).count();
+    if mode.as_deref().unwrap_or("reject") != "remove-references" && (!relationships.is_empty() || !nodes.is_empty() || links > 0) { return Err(format!("Cannot delete {}: {} relationship(s), {} document link(s), and {} canvas node(s) still refer to it. Choose remove-references to keep unresolved links repairable.", item.title, relationships.len(), links, nodes.len())); }
+    if mode.as_deref() == Some("remove-references") {
+        state.store.relationships.retain(|value| !relationships.contains(&value.id));
+        state.store.document_links.iter_mut().filter(|value| value.target_id.as_deref() == Some(&item_id)).for_each(|value| { value.target_id = None; value.unresolved_label = Some(item.title.clone()); });
+        state.store.canvas_nodes.retain(|value| !nodes.contains(&value.id));
+        state.store.canvas_edges.retain(|value| !relationships.contains(&value.relationship_id) && !nodes.contains(&value.source_node_id) && !nodes.contains(&value.target_node_id));
+    }
+    state.store.worldbuilding_items.retain(|value| value.id != item_id); status(&mut state, "saved", "Worldbuilding item deleted safely"); state.persist()?; Ok(())
+}
+#[tauri::command]
+fn list_worldbuilding_items(kind: Option<String>, app: State<'_, Mutex<AppState>>) -> Result<Vec<WorldbuildingItem>, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let mut values: Vec<WorldbuildingItem> = state.store.worldbuilding_items.iter().filter(|item| kind.as_ref().map(|kind| &item.kind == kind).unwrap_or(true)).cloned().collect(); values.sort_by(|left, right| left.title.cmp(&right.title)); Ok(values) }
+#[tauri::command]
+fn search_worldbuilding(query: String, app: State<'_, Mutex<AppState>>) -> Result<Vec<WorldbuildingItem>, String> {
+    let state = app.lock().map_err(|_| "Project lock poisoned")?; let needle = query.trim().to_lowercase(); if needle.is_empty() { let mut values = state.store.worldbuilding_items.clone(); values.sort_by(|left, right| left.title.cmp(&right.title)); return Ok(values); }
+    let linked: Vec<String> = state.store.relationships.iter().filter(|relationship| relationship.relation_type.contains(needle.as_str()) || entity(&state.store, &relationship.source_id).map(|value| value.1.to_lowercase().contains(&needle)).unwrap_or(false) || entity(&state.store, &relationship.target_id).map(|value| value.1.to_lowercase().contains(&needle)).unwrap_or(false)).flat_map(|relationship| vec![relationship.source_id.clone(), relationship.target_id.clone()]).collect();
+    let mut values: Vec<WorldbuildingItem> = state.store.worldbuilding_items.iter().filter(|item| item.title.to_lowercase().contains(&needle) || item.aliases.iter().any(|alias| alias.to_lowercase().contains(&needle)) || item.properties.as_object().map(|properties| properties.values().any(|value| value.as_str().map(|value| value.to_lowercase().contains(&needle)).unwrap_or(false))).unwrap_or(false) || linked.contains(&item.id)).cloned().collect(); values.sort_by(|left, right| left.title.cmp(&right.title)); Ok(values)
+}
+#[tauri::command]
+fn create_relationship(source_id: String, target_id: String, relation_type: String, app: State<'_, Mutex<AppState>>) -> Result<DomainRelationship, String> {
+    let mut state = app.lock().map_err(|_| "Project lock poisoned")?; validate_relationship(&state.store, &source_id, &target_id, &relation_type)?;
+    if let Some(value) = state.store.relationships.iter().find(|value| value.source_id == source_id && value.target_id == target_id && value.relation_type == relation_type) { return Ok(value.clone()); }
+    let value = DomainRelationship { id: id("relationship"), source_id, target_id, relation_type, created_at: timestamp() }; state.store.relationships.push(value.clone()); status(&mut state, "saved", "Relationship saved"); state.persist()?; Ok(value)
+}
+#[tauri::command]
+fn delete_relationship(relationship_id: String, app: State<'_, Mutex<AppState>>) -> Result<(), String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; relationship(&state.store, &relationship_id)?; state.store.relationships.retain(|value| value.id != relationship_id); state.store.canvas_edges.retain(|edge| edge.relationship_id != relationship_id); status(&mut state, "saved", "Relationship removed from links and canvases"); state.persist()?; Ok(()) }
+#[tauri::command]
+fn list_relationships(entity_id: Option<String>, app: State<'_, Mutex<AppState>>) -> Result<Vec<DomainRelationship>, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; Ok(state.store.relationships.iter().filter(|value| entity_id.as_ref().map(|id| value.source_id == *id || value.target_id == *id).unwrap_or(true)).cloned().collect()) }
+#[tauri::command]
+fn list_backlinks(target_id: String, app: State<'_, Mutex<AppState>>) -> Result<Vec<Backlink>, String> {
+    let state = app.lock().map_err(|_| "Project lock poisoned")?; entity(&state.store, &target_id)?; let mut values: Vec<Backlink> = state.store.relationships.iter().filter(|value| value.target_id == target_id).filter_map(|value| entity(&state.store, &value.source_id).ok().map(|source| Backlink::Relationship { id: value.id.clone(), source_id: value.source_id.clone(), source_title: source.1, relation_type: value.relation_type.clone() })).collect();
+    values.extend(state.store.document_links.iter().filter(|value| value.target_id.as_deref() == Some(&target_id)).map(|value| Backlink::Document { id: value.id.clone(), source_id: value.anchor.document_id.clone(), source_title: document_title(&state.store, &value.anchor.document_id), anchor: value.anchor.clone() })); Ok(values)
+}
+#[tauri::command]
+fn create_document_link(anchor: DocumentAnchor, target_id: Option<String>, unresolved_label: Option<String>, app: State<'_, Mutex<AppState>>) -> Result<DocumentLink, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; validate_anchor(&state.store, &anchor)?; if let Some(target) = &target_id { worldbuilding_item(&state.store, target)?; } else if unresolved_label.as_ref().map(|value| value.trim().is_empty()).unwrap_or(true) { return Err("An unresolved document link needs a visible label".into()); } let value = DocumentLink { id: id("document-link"), anchor, target_id, unresolved_label: unresolved_label.map(|value| value.trim().into()).filter(|value: &String| !value.is_empty()), created_at: timestamp() }; state.store.document_links.push(value.clone()); status(&mut state, "saved", "Document link saved"); state.persist()?; Ok(value) }
+#[tauri::command]
+fn repair_document_link(link_id: String, target_id: String, app: State<'_, Mutex<AppState>>) -> Result<DocumentLink, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; worldbuilding_item(&state.store, &target_id)?; let link = state.store.document_links.iter_mut().find(|value| value.id == link_id).ok_or_else(|| "Unknown document link".to_string())?; link.target_id = Some(target_id); link.unresolved_label = None; let value = link.clone(); status(&mut state, "saved", "Document link repaired"); state.persist()?; Ok(value) }
+#[tauri::command]
+fn list_document_links(document_id: Option<String>, app: State<'_, Mutex<AppState>>) -> Result<Vec<DocumentLink>, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; Ok(state.store.document_links.iter().filter(|value| document_id.as_ref().map(|id| value.anchor.document_id == *id).unwrap_or(true)).cloned().collect()) }
+#[tauri::command]
+fn create_canvas(story_id: String, title: String, app: State<'_, Mutex<AppState>>) -> Result<StoryCanvas, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; story(&state.store, &story_id)?; if title.trim().is_empty() { return Err("Canvas title is required".into()); } let value = StoryCanvas { id: id("canvas"), story_id, title: title.trim().into(), viewport: CanvasViewport { x: 0.0, y: 0.0, zoom: 1.0 }, revision: 1, created_at: timestamp(), updated_at: timestamp() }; state.store.canvases.push(value.clone()); status(&mut state, "saved", "Story canvas saved"); state.persist()?; Ok(value) }
+#[tauri::command]
+fn list_canvases(story_id: Option<String>, app: State<'_, Mutex<AppState>>) -> Result<Vec<StoryCanvas>, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; Ok(state.store.canvases.iter().filter(|value| story_id.as_ref().map(|id| value.story_id == *id).unwrap_or(true)).cloned().collect()) }
+#[tauri::command]
+fn canvas_projection(canvas_id: String, app: State<'_, Mutex<AppState>>) -> Result<CanvasProjection, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let value = canvas(&state.store, &canvas_id)?.clone(); let nodes: Result<Vec<CanvasProjectionNode>, String> = state.store.canvas_nodes.iter().filter(|node| node.canvas_id == canvas_id).map(|node| entity(&state.store, &node.entity_id).map(|item| CanvasProjectionNode { id: node.id.clone(), canvas_id: node.canvas_id.clone(), entity_id: node.entity_id.clone(), position: node.position.clone(), entity_kind: item.0, label: item.1 })).collect(); Ok(CanvasProjection { canvas: value, nodes: nodes?, edges: state.store.canvas_edges.iter().filter(|edge| edge.canvas_id == canvas_id).cloned().collect() }) }
+#[tauri::command]
+fn add_canvas_node(canvas_id: String, entity_id: String, position: CanvasPosition, expected_revision: i64, app: State<'_, Mutex<AppState>>) -> Result<CanvasNode, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let canvas_value = canvas(&state.store, &canvas_id)?.clone(); if canvas_value.revision != expected_revision { status(&mut state, "revision-conflict", "Save stopped: this canvas changed elsewhere"); state.persist()?; return Err(format!("Revision conflict: expected {expected_revision}, current {}", canvas_value.revision)); } entity(&state.store, &entity_id)?; if !entity_in_story(&state.store, &entity_id, &canvas_value.story_id) { return Err("Chapter and scene nodes must belong to this canvas story".into()); } if !valid_position(&position) { return Err("Canvas position is invalid".into()); } if let Some(value) = state.store.canvas_nodes.iter().find(|node| node.canvas_id == canvas_id && node.entity_id == entity_id) { return Ok(value.clone()); } let value = CanvasNode { id: id("canvas-node"), canvas_id: canvas_id.clone(), entity_id, position }; state.store.canvas_nodes.push(value.clone()); let canvas_mut = state.store.canvases.iter_mut().find(|item| item.id == canvas_id).unwrap(); canvas_mut.revision += 1; canvas_mut.updated_at = timestamp(); status(&mut state, "saved", "Canvas node added"); state.persist()?; Ok(value) }
+#[tauri::command]
+fn remove_canvas_node(canvas_id: String, node_id: String, expected_revision: i64, app: State<'_, Mutex<AppState>>) -> Result<(), String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let canvas_value = canvas(&state.store, &canvas_id)?.clone(); if canvas_value.revision != expected_revision { return Err(format!("Revision conflict: expected {expected_revision}, current {}", canvas_value.revision)); } canvas_node(&state.store, &canvas_id, &node_id)?; state.store.canvas_nodes.retain(|node| node.id != node_id); state.store.canvas_edges.retain(|edge| edge.source_node_id != node_id && edge.target_node_id != node_id); let canvas_mut = state.store.canvases.iter_mut().find(|item| item.id == canvas_id).unwrap(); canvas_mut.revision += 1; canvas_mut.updated_at = timestamp(); status(&mut state, "saved", "Canvas placement removed; domain data is unchanged"); state.persist()?; Ok(()) }
+#[tauri::command]
+fn connect_canvas_nodes(canvas_id: String, source_node_id: String, target_node_id: String, relationship_id: String, expected_revision: i64, app: State<'_, Mutex<AppState>>) -> Result<CanvasEdge, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let canvas_value = canvas(&state.store, &canvas_id)?.clone(); if canvas_value.revision != expected_revision { return Err(format!("Revision conflict: expected {expected_revision}, current {}", canvas_value.revision)); } let source = canvas_node(&state.store, &canvas_id, &source_node_id)?.clone(); let target = canvas_node(&state.store, &canvas_id, &target_node_id)?.clone(); let relation = relationship(&state.store, &relationship_id)?.clone(); if relation.source_id != source.entity_id || relation.target_id != target.entity_id { return Err("Canvas edges must use a relationship whose stable source and target match the selected nodes".into()); } if let Some(value) = state.store.canvas_edges.iter().find(|edge| edge.canvas_id == canvas_id && edge.source_node_id == source_node_id && edge.target_node_id == target_node_id && edge.relationship_id == relationship_id) { return Ok(value.clone()); } let value = CanvasEdge { id: id("canvas-edge"), canvas_id: canvas_id.clone(), source_node_id, target_node_id, relationship_id }; state.store.canvas_edges.push(value.clone()); let canvas_mut = state.store.canvases.iter_mut().find(|item| item.id == canvas_id).unwrap(); canvas_mut.revision += 1; canvas_mut.updated_at = timestamp(); status(&mut state, "saved", "Validated relationship added to canvas"); state.persist()?; Ok(value) }
+#[tauri::command]
+fn save_canvas_layout(canvas_id: String, positions: Vec<CanvasPositionUpdate>, viewport: CanvasViewport, expected_revision: i64, app: State<'_, Mutex<AppState>>) -> Result<StoryCanvas, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let current = canvas(&state.store, &canvas_id)?.clone(); if current.revision != expected_revision { return Err(format!("Revision conflict: expected {expected_revision}, current {}", current.revision)); } if !viewport.x.is_finite() || !viewport.y.is_finite() || !viewport.zoom.is_finite() || viewport.zoom <= 0.0 { return Err("Canvas viewport is invalid".into()); } for update in &positions { if !valid_position(&update.position) { return Err("Canvas position is invalid".into()); } let node = state.store.canvas_nodes.iter_mut().find(|node| node.canvas_id == canvas_id && node.id == update.id).ok_or_else(|| format!("Unknown canvas node {}", update.id))?; node.position = update.position.clone(); } let canvas_mut = state.store.canvases.iter_mut().find(|item| item.id == canvas_id).unwrap(); canvas_mut.viewport = viewport; canvas_mut.revision += 1; canvas_mut.updated_at = timestamp(); let value = canvas_mut.clone(); status(&mut state, "saved", "Canvas arrangement saved; domain content is unchanged"); state.persist()?; Ok(value) }
 
 #[tauri::command]
 fn get_document(document_id: String, app: State<'_, Mutex<AppState>>) -> Result<DocumentHead, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let record = document_record(&state.store, &document_id)?; let revision = record.revisions.last().ok_or_else(|| "Document has no revision".to_string())?; Ok(DocumentHead { document_id, document: revision.document.clone(), revision: record.head_revision, revision_id: revision.id.clone() }) }
@@ -206,9 +356,9 @@ fn recover_from_backup(backup_id: String, app: State<'_, Mutex<AppState>>) -> Re
 #[tauri::command]
 fn get_status(app: State<'_, Mutex<AppState>>) -> Result<OperationStatus, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; Ok(state.store.status.clone()) }
 #[tauri::command]
-fn project_snapshot(app: State<'_, Mutex<AppState>>) -> Result<ProjectSnapshot, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let project = state.store.project.clone().ok_or_else(|| "No project is open".to_string())?; Ok(ProjectSnapshot { project, stories: state.store.stories.clone(), chapters: state.store.chapters.clone(), scene_sets: state.store.scene_sets.clone(), scenes: state.store.scenes.clone(), continuous_drafts: state.store.drafts.clone(), style_profile: state.store.style_profile.clone(), writing_stats: make_writing_stats(&state.store), status: state.store.status.clone() }) }
+fn project_snapshot(app: State<'_, Mutex<AppState>>) -> Result<ProjectSnapshot, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let project = state.store.project.clone().ok_or_else(|| "No project is open".to_string())?; Ok(ProjectSnapshot { project, stories: state.store.stories.clone(), chapters: state.store.chapters.clone(), scene_sets: state.store.scene_sets.clone(), scenes: state.store.scenes.clone(), continuous_drafts: state.store.drafts.clone(), worldbuilding_items: state.store.worldbuilding_items.clone(), relationships: state.store.relationships.clone(), document_links: state.store.document_links.clone(), canvases: state.store.canvases.clone(), style_profile: state.store.style_profile.clone(), writing_stats: make_writing_stats(&state.store), status: state.store.status.clone() }) }
 #[tauri::command]
 fn write_export(filename: String, bytes: Vec<u8>, app: State<'_, Mutex<AppState>>) -> Result<String, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let root = state.root.as_ref().ok_or_else(|| "No project is open".to_string())?; let exports = root.join(".weave").join("exports"); fs::create_dir_all(&exports).map_err(|e| e.to_string())?; let safe = Path::new(&filename).file_name().ok_or_else(|| "Invalid export filename".to_string())?; let path = exports.join(safe); fs::write(&path, bytes).map_err(|e| e.to_string())?; Ok(path.to_string_lossy().into_owned()) }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() { tauri::Builder::default().manage(Mutex::new(AppState::default())).invoke_handler(tauri::generate_handler![create_project, open_project, get_project, create_story, create_chapter, create_scene, list_stories, list_chapters, list_scene_sets, list_scenes, rename_scene, reorder_scene, get_document, get_revision, save_document, get_style_profile, update_style_profile, writing_stats, set_daily_word_target, enter_continuous_draft, get_continuous_draft, keep_continuous_separate, automatically_split_continuous, compose_chapter, integrity_check, create_backup, recover_from_backup, get_status, project_snapshot, write_export]).run(tauri::generate_context!()).expect("error while running Weave"); }
+pub fn run() { tauri::Builder::default().manage(Mutex::new(AppState::default())).invoke_handler(tauri::generate_handler![create_project, open_project, get_project, create_story, create_chapter, create_scene, list_stories, list_chapters, list_scene_sets, list_scenes, rename_scene, reorder_scene, create_worldbuilding_item, update_worldbuilding_item, delete_worldbuilding_item, list_worldbuilding_items, search_worldbuilding, create_relationship, delete_relationship, list_relationships, list_backlinks, create_document_link, repair_document_link, list_document_links, create_canvas, list_canvases, canvas_projection, add_canvas_node, remove_canvas_node, connect_canvas_nodes, save_canvas_layout, get_document, get_revision, save_document, get_style_profile, update_style_profile, writing_stats, set_daily_word_target, enter_continuous_draft, get_continuous_draft, keep_continuous_separate, automatically_split_continuous, compose_chapter, integrity_check, create_backup, recover_from_backup, get_status, project_snapshot, write_export]).run(tauri::generate_context!()).expect("error while running Weave"); }

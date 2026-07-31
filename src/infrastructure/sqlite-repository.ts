@@ -14,7 +14,7 @@ const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as { Data
 import { InMemoryProjectRepository } from '../domain/repository';
 import { now } from '../domain/document';
 import { DEFAULT_EDITOR_STYLE, type EditorStyleProfile, type WritingGoals } from '../domain/types';
-import type { BackupRecord, OperationStatus, Project, StructuredDocument } from '../domain/types';
+import type { BackupRecord, OperationStatus, Project, StructuredDocument, WorldbuildingItem, WorldbuildingItemKind, WorldbuildingProperties, RelationshipType, DomainRelationship, DocumentAnchor, DocumentLink, StoryCanvas, CanvasPosition, CanvasViewport, CanvasNode, CanvasEdge } from '../domain/types';
 import type { SaveDocumentResult, SplitResult, DocumentHead } from '../domain/repository';
 import type { Chapter, ContinuousDraft, IntegrityReport, Revision, Scene, SceneSet, Story } from '../domain/types';
 
@@ -27,6 +27,12 @@ interface PersistedState {
   documents: any[];
   drafts: ContinuousDraft[];
   backups: BackupRecord[];
+  worldbuildingItems: WorldbuildingItem[];
+  relationships: DomainRelationship[];
+  documentLinks: DocumentLink[];
+  canvases: StoryCanvas[];
+  canvasNodes: CanvasNode[];
+  canvasEdges: CanvasEdge[];
   styleProfile: EditorStyleProfile;
   writingGoals: WritingGoals;
   status: OperationStatus;
@@ -70,6 +76,18 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
   async createScene(chapterId: string, title: string, document?: StructuredDocument): Promise<Scene> { const value = await super.createScene(chapterId, title, document); this.persist(); return value; }
   async renameScene(sceneId: string, title: string): Promise<Scene> { const value = await super.renameScene(sceneId, title); this.persist(); return value; }
   async reorderScene(sceneId: string, position: number): Promise<Scene[]> { const value = await super.reorderScene(sceneId, position); this.persist(); return value; }
+  async createWorldbuildingItem(input: { kind: WorldbuildingItemKind; title: string; aliases?: string[]; properties?: WorldbuildingProperties }): Promise<WorldbuildingItem> { const value = await super.createWorldbuildingItem(input); this.persist(); return value; }
+  async updateWorldbuildingItem(itemId: string, input: { title: string; aliases: string[]; properties: WorldbuildingProperties }, expectedRevision: number): Promise<WorldbuildingItem> { try { const value = await super.updateWorldbuildingItem(itemId, input, expectedRevision); this.persist(); return value; } catch (error) { this.persist(); throw error; } }
+  async deleteWorldbuildingItem(itemId: string, expectedRevision: number, mode?: 'reject' | 'remove-references'): Promise<void> { try { await super.deleteWorldbuildingItem(itemId, expectedRevision, mode); this.persist(); } catch (error) { this.persist(); throw error; } }
+  async createRelationship(sourceId: string, targetId: string, type: RelationshipType): Promise<DomainRelationship> { const value = await super.createRelationship(sourceId, targetId, type); this.persist(); return value; }
+  async deleteRelationship(relationshipId: string): Promise<void> { await super.deleteRelationship(relationshipId); this.persist(); }
+  async createDocumentLink(anchor: DocumentAnchor, targetId?: string, unresolvedLabel?: string): Promise<DocumentLink> { const value = await super.createDocumentLink(anchor, targetId, unresolvedLabel); this.persist(); return value; }
+  async repairDocumentLink(linkId: string, targetId: string): Promise<DocumentLink> { const value = await super.repairDocumentLink(linkId, targetId); this.persist(); return value; }
+  async createCanvas(storyId: string, title: string): Promise<StoryCanvas> { const value = await super.createCanvas(storyId, title); this.persist(); return value; }
+  async addCanvasNode(canvasId: string, entityId: string, position: CanvasPosition, expectedRevision: number): Promise<CanvasNode> { try { const value = await super.addCanvasNode(canvasId, entityId, position, expectedRevision); this.persist(); return value; } catch (error) { this.persist(); throw error; } }
+  async removeCanvasNode(canvasId: string, nodeId: string, expectedRevision: number): Promise<void> { try { await super.removeCanvasNode(canvasId, nodeId, expectedRevision); this.persist(); } catch (error) { this.persist(); throw error; } }
+  async connectCanvasNodes(canvasId: string, sourceNodeId: string, targetNodeId: string, relationshipId: string, expectedRevision: number): Promise<CanvasEdge> { try { const value = await super.connectCanvasNodes(canvasId, sourceNodeId, targetNodeId, relationshipId, expectedRevision); this.persist(); return value; } catch (error) { this.persist(); throw error; } }
+  async saveCanvasLayout(canvasId: string, positions: Array<{ id: string; position: CanvasPosition }>, viewport: CanvasViewport, expectedRevision: number): Promise<StoryCanvas> { try { const value = await super.saveCanvasLayout(canvasId, positions, viewport, expectedRevision); this.persist(); return value; } catch (error) { this.persist(); throw error; } }
 
   async updateStyleProfile(profile: EditorStyleProfile): Promise<EditorStyleProfile> {
     const value = await super.updateStyleProfile(profile);
@@ -175,6 +193,10 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
     if (!migration) {
       this.database.exec('BEGIN; INSERT INTO schema_migrations(version, applied_at) VALUES (1, datetime(\'now\')); COMMIT;');
     }
+    const worldbuildingMigration = this.database.prepare('SELECT version FROM schema_migrations WHERE version = 2').get();
+    if (!worldbuildingMigration) {
+      this.database.exec('BEGIN; INSERT INTO schema_migrations(version, applied_at) VALUES (2, datetime(\'now\')); COMMIT;');
+    }
   }
 
   private loadState(): void {
@@ -183,9 +205,16 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
     const value = JSON.parse(row.state_json) as any;
     this.state = {
       ...value,
+      worldbuildingItems: value.worldbuildingItems ?? [],
+      relationships: value.relationships ?? [],
+      documentLinks: value.documentLinks ?? [],
+      canvases: value.canvases ?? [],
+      canvasNodes: value.canvasNodes ?? [],
+      canvasEdges: value.canvasEdges ?? [],
       styleProfile: { ...DEFAULT_EDITOR_STYLE, ...(value.styleProfile ?? {}) },
       writingGoals: { dailyTarget: 500, dailyWordCounts: {}, ...(value.writingGoals ?? {}) }
     };
+    if (this.state.project && this.state.project.schemaVersion < 2) this.state.project.schemaVersion = 2;
   }
 
   private persist(): void {
