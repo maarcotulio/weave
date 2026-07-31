@@ -1,0 +1,31 @@
+[package]
+name = "weave"
+version = "0.1.0"
+description = "Weave offline writing desktop"
+authors = ["Weave"]
+edition = "2021"
+
+[lib]
+name = "weave_lib"
+path = "src/main.rs"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "weave"
+path = "src/bin/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2.0", features = [] }
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
