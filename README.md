@@ -25,14 +25,14 @@ The theme choice is presentation-only: it is stored in browser/webview local sto
 ## Run and validate
 
 ```sh
-npm install
+npm ci
 npm test
 npm run build
 npm run desktop:dev    # requires the Tauri 2 system toolchain
 npm run desktop:build  # requires the Tauri 2 system toolchain
 ```
 
-The Vite/browser fallback uses the in-memory repository for UI work; the desktop build uses SQLite through `src-tauri/`.
+If Vite reports `Failed to resolve import "@excalidraw/excalidraw"`, the local dependency tree is incomplete; run `npm ci` from the repository root before changing source imports. The Vite/browser fallback uses the in-memory repository for UI work; the desktop build uses SQLite through `src-tauri/`.
 
 Excalidraw uses the maintained `@excalidraw/excalidraw` **0.18.1** package (MIT license; peer-compatible with React 18). Its package-bundled CSS and font assets are shipped locally with the desktop bundle, so no runtime network or collaboration service is required. The engine is intentionally not tldraw or another substitute.
 
