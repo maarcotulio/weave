@@ -8,6 +8,7 @@ const workspaceSource = readFileSync(join(process.cwd(), 'src/app/Worldbuilding.
 describe('Markdown note sidebar actions', () => {
   it('keeps note opening on the title and isolates row actions', () => {
     expect(appSource).toContain('worldbuilding-sidebar-note-row');
+    expect(appSource).toContain("worldbuilding-sidebar-note-row ${selected ? 'selected' : ''}");
     expect(appSource).toContain('worldbuilding-sidebar-note-title');
     expect(appSource).toContain('onClick={() => openWorldbuildingTab({ kind: \'note\', id: note.id })}');
     expect(appSource).toContain('event.stopPropagation(); requestRenameNote(note)');
@@ -15,6 +16,7 @@ describe('Markdown note sidebar actions', () => {
     expect(appSource).toContain("import { Pencil, Plus, Trash2 } from 'lucide-react'");
     expect(appSource).toContain('<Pencil size={14} strokeWidth={2} aria-hidden="true" />');
     expect(appSource).toContain('<Trash2 size={14} strokeWidth={2} aria-hidden="true" />');
+    expect(readFileSync(join(process.cwd(), 'src/app/styles.css'), 'utf8')).toContain('.worldbuilding-sidebar-note-row:hover, .worldbuilding-sidebar-note-row:focus-within, .worldbuilding-sidebar-note-row.selected { background: var(--accent-tint); }');
     expect(appSource).not.toContain('worldbuilding-sidebar-note-action">Rename');
     expect(appSource).not.toContain('worldbuilding-sidebar-note-delete" aria-label={`Delete ${note.title}`} onClick');
   });

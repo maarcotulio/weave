@@ -18,7 +18,7 @@
 ## Durable phase status
 
 - Completed: Phase 1 writing/persistence/export; writing UX, pagination, autosave, and goals; and Worldbuilding/React Flow with the current Markdown-notes-only clarification.
-- Planned: the remaining single-sidebar UX correction; dark mode is implemented with presentation-only local preference storage.
+- Completed: the single-sidebar UX correction and Markdown note rich-text shortcuts; dark mode is implemented with presentation-only local preference storage.
 
 ## Maintaining this file
 
