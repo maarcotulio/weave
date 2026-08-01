@@ -19,8 +19,11 @@ describe('writing navigation and motivation surfaces', () => {
     expect(app).toContain('>Export all</button><button type="button" onClick={() => navigate(\'settings\')');
     expect(app).not.toContain('id="home-workspace-tab"');
     expect(home).toContain('Writing activity heatmap');
-    expect(home).toContain('days = 365');
+    expect(home).toContain('Your writing rhythm');
+    expect(home).toContain('Daily pace');
     expect(settings).toContain('Global text margins');
+    expect(settings).toContain('Local writing statistics');
+    expect(settings).toContain('Repeated autosaves with no new words');
     expect(styles).toContain('.focus-mode .topbar');
     expect(styles).toContain('.toast');
   });
