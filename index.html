@@ -4,6 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#f4f1eb" />
+    <script>
+      (() => {
+        try {
+          const theme = localStorage.getItem('weave.theme');
+          if (theme === 'light' || theme === 'dark') {
+            document.documentElement.dataset.theme = theme;
+            document.querySelector('meta[name="theme-color"]').setAttribute('content', theme === 'dark' ? '#17150f' : '#f4f1eb');
+          }
+        } catch { /* local-only preference is best effort */ }
+      })();
+    </script>
     <title>Weave — offline writing</title>
   </head>
   <body>

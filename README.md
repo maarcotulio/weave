@@ -11,6 +11,7 @@ There is no cloud service, sync, AI, Docker runtime, or network dependency.
 - **Writing UX, pagination, autosave, and goals:** document-sized reflowed pages, responsive editing, style settings, dialogs, debounced local autosave with retry/flush and recovery status, and persisted daily/project word goals are implemented.
 - **Worldbuilding and React Flow:** local Markdown notes and user-created story canvases, accessible tabs and navigation, and React Flow projections are implemented.
 - **Markdown-notes-only clarification:** the current baseline limits worldbuilding canvases to Markdown-note nodes and resolved Markdown links; previous generic worldbuilding entities, scene nodes, relationships, and freeform drawing are not part of this product slice.
+- **Dark mode:** the renderer supports persisted light/dark themes with token-driven surfaces, editor controls, dialogs, and React Flow overrides.
 
 ## Product patterns
 
@@ -19,6 +20,7 @@ Continuous-to-scene splitting is deterministic and recognizes only whole paragra
 Autosave is local, revision-aware, and flushed on navigation, mode changes, exports, backups, and close; failed saves remain retryable.
 Markdown notes recognize only exact `[[Target]]` and `[[Target|label]]` links, with unique local-note resolution and repairable unresolved links.
 React Flow is the sole canvas engine, and canvas positions/viewport are projection/layout data kept separate from domain records and note Markdown.
+The theme choice is presentation-only: it is stored in browser/webview local storage under `weave.theme`, never in the project repository, and defaults to light when absent or unavailable. The inline bootstrap applies a valid saved choice before the renderer loads to avoid a light-mode flash.
 
 ## Run and validate
 
@@ -43,5 +45,4 @@ The Vite/browser fallback uses the in-memory repository for UI work; the desktop
 ## Planned roadmap
 
 - Complete the remaining single-sidebar UX correction and verify it across all workspace states.
-- Add dark mode in a future phase.
 - Revisit native file-picker UX and other scope expansions only as separately implemented work; they are not current features.

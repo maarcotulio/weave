@@ -7,3 +7,5 @@ a:hover{color:var(--accent)}
 button,textarea,select,input{font:inherit}
 button{cursor:pointer}
 button:disabled{cursor:not-allowed;opacity:.45}
+:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+::selection{color:var(--on-accent);background:var(--accent)}
