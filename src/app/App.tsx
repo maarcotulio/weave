@@ -146,6 +146,16 @@ function CanvasChoiceDialog({ busy, onCancel, onSubmit }: { busy: boolean; onCan
   </Modal>;
 }
 
+function NoteCreateDialog({ busy, onCancel, onSubmit }: { busy: boolean; onCancel: () => void; onSubmit: (title: string) => void }) {
+  const [value, setValue] = useState('');
+  return <Modal eyebrow="NOTE" title="Create note" onClose={busy ? undefined : onCancel}>
+    <form onSubmit={(event) => { event.preventDefault(); const title = value.trim(); if (title) onSubmit(title); }}>
+      <label className="modal-field">Note name<input id="create-note-name" autoFocus required aria-label="Note name" value={value} onChange={(event) => setValue(event.target.value)} /></label>
+      <div className="modal-actions"><button type="button" className="text-button" disabled={busy} onClick={onCancel}>Cancel</button><button type="submit" className="primary-button" disabled={busy || !value.trim()}>Create note</button></div>
+    </form>
+  </Modal>;
+}
+
 function NoteRenameDialog({ initialTitle, busy, onCancel, onSubmit }: { initialTitle: string; busy: boolean; onCancel: () => void; onSubmit: (title: string) => void }) {
   const [value, setValue] = useState(initialTitle);
   useEffect(() => setValue(initialTitle), [initialTitle]);
@@ -197,6 +207,7 @@ export default function App() {
   const [showReturnChoices, setShowReturnChoices] = useState(false);
   const [formDialog, setFormDialog] = useState<FormDialogConfig>();
   const [canvasDialog, setCanvasDialog] = useState<{ storyId: string }>();
+  const [noteCreateDialog, setNoteCreateDialog] = useState(false);
   const [noteAction, setNoteAction] = useState<NoteActionState>();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -380,7 +391,15 @@ export default function App() {
   const updateGoal = (target: number) => void run(async () => { await repository.setDailyWordTarget(target); const writingStats = await repository.getWritingStats(); setSnapshot((current) => current ? { ...current, writingStats } : current); });
   const newStory = () => void run(async () => { await autosave.flush(); setFormDialog({ eyebrow: 'MANUSCRIPT', title: 'New story', fields: [{ key: 'title', label: 'Story title', value: 'New story' }], onSubmit: async (values) => { const title = values.title.trim(); if (title) { await repository.createStory(title); await refresh(false); } } }); });
   const retryAutosave = () => void run(async () => { await autosave.retry(); });
-  const createWorldbuildingNote = () => void run(async () => { await autosave.flush(); const note = await repository.createMarkdownNote('Untitled note'); await refresh(); openWorldbuildingTab({ kind: 'note', id: note.id }); });
+  const createWorldbuildingNote = () => void run(async () => { await autosave.flush(); setNoteCreateDialog(true); });
+  const submitNoteCreate = (title: string) => void run(async () => {
+    const name = title.trim();
+    if (!name) return;
+    const note = await repository.createMarkdownNote(name);
+    setNoteCreateDialog(false);
+    await refresh();
+    openWorldbuildingTab({ kind: 'note', id: note.id });
+  });
   const createWorldbuildingCanvas = () => void run(async () => { await autosave.flush(); if (!selectedStoryId) { setLocalError('Choose a manuscript story before creating a local note canvas.'); return; } setCanvasDialog({ storyId: selectedStoryId }); });
   const submitCanvasChoice = (title: string, engine: CanvasEngine) => void run(async () => { const choice = canvasDialog; if (!choice) return; const canvas = await repository.createCanvas(choice.storyId, title, engine); setCanvasDialog(undefined); await refresh(); openWorldbuildingTab({ kind: 'canvas', id: canvas.id }); });
   const openWorldbuildingTab = (tab: WorldbuildingTab) => { const key = worldbuildingTabKey(tab); setWorldbuildingTabs((current) => current.some((candidate) => worldbuildingTabKey(candidate) === key) ? current : [...current, tab]); setActiveWorldbuildingTabKey(key); };
@@ -433,6 +452,7 @@ export default function App() {
     </main>}
     {showReturnChoices && <ChoiceDialog onSplit={split} onKeep={keepSeparate} onCancel={() => setShowReturnChoices(false)} busy={busy} />}
     {formDialog && <FormDialog config={formDialog} busy={busy} onCancel={() => setFormDialog(undefined)} onSubmit={submitFormDialog} />}
+    {noteCreateDialog && <NoteCreateDialog busy={busy} onCancel={() => setNoteCreateDialog(false)} onSubmit={submitNoteCreate} />}
     {canvasDialog && <CanvasChoiceDialog busy={busy} onCancel={() => setCanvasDialog(undefined)} onSubmit={submitCanvasChoice} />}
     {noteAction?.kind === 'rename' && <NoteRenameDialog initialTitle={noteAction.title} busy={busy} onCancel={() => setNoteAction(undefined)} onSubmit={submitNoteRename} />}
     {noteAction?.kind === 'delete' && <NoteDeleteDialog title={noteAction.title} phase={noteAction.phase} referenceMessage={noteAction.referenceMessage} busy={busy} onCancel={() => setNoteAction(undefined)} onConfirm={() => confirmNoteDelete(noteAction.phase === 'references' ? 'remove-references' : 'reject')} />}

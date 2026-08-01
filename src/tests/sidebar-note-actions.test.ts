@@ -45,4 +45,32 @@ describe('Markdown note sidebar actions', () => {
     expect(appSource).toContain('>Cancel</button>');
     expect(appSource).toContain('className="danger-button"');
   });
+
+  it('defines an accessible note-name modal and keeps creation behind explicit confirmation', () => {
+    expect(appSource).toContain('function NoteCreateDialog');
+    expect(appSource).toContain('<Modal eyebrow="NOTE" title="Create note" onClose={busy ? undefined : onCancel}>');
+    expect(appSource).toContain('id="create-note-name"');
+    expect(appSource).toContain('autoFocus required aria-label="Note name"');
+    expect(appSource).toContain('>Cancel</button>');
+    expect(appSource).toContain('>Create note</button>');
+    expect(appSource).toContain('disabled={busy || !value.trim()}');
+    expect(appSource).toContain('const title = value.trim(); if (title) onSubmit(title);');
+    expect(appSource).toContain('noteCreateDialog && <NoteCreateDialog');
+
+    const createStart = appSource.indexOf('const createWorldbuildingNote =');
+    const submitStart = appSource.indexOf('const submitNoteCreate =', createStart);
+    const canvasStart = appSource.indexOf('const createWorldbuildingCanvas =', submitStart);
+    expect(createStart).toBeGreaterThanOrEqual(0);
+    expect(submitStart).toBeGreaterThan(createStart);
+    expect(canvasStart).toBeGreaterThan(submitStart);
+    expect(appSource.slice(createStart, submitStart)).toContain('await autosave.flush(); setNoteCreateDialog(true);');
+    expect(appSource.slice(createStart, submitStart)).not.toContain('createMarkdownNote');
+    const submitFlow = appSource.slice(submitStart, canvasStart);
+    expect(submitFlow).toContain('const name = title.trim();');
+    expect(submitFlow).toContain('if (!name) return;');
+    expect(submitFlow).toContain('repository.createMarkdownNote(name)');
+    expect(submitFlow).toContain('setNoteCreateDialog(false);');
+    expect(submitFlow).toContain('await refresh();');
+    expect(submitFlow).toContain('openWorldbuildingTab({ kind: \'note\', id: note.id })');
+  });
 });

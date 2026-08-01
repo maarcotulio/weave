@@ -238,6 +238,7 @@ function applyMarkdownShortcut(root: HTMLElement): boolean {
 
 export function MarkdownPageEditor({ markdown, pageIndex, onChange }: { markdown: string; pageIndex: number; onChange: (value: string) => void }) {
   const editorRef = useRef<HTMLDivElement>(null);
+  const renderedMarkdownRef = useRef<string>();
   const emitMarkdown = useCallback(() => {
     const element = editorRef.current;
     if (element) onChange(htmlToMarkdown(element));
@@ -245,8 +246,17 @@ export function MarkdownPageEditor({ markdown, pageIndex, onChange }: { markdown
 
   useLayoutEffect(() => {
     const element = editorRef.current;
-    if (!element || htmlToMarkdown(element) === markdown) return;
-    element.innerHTML = markdownToHtml(markdown);
+    if (!element) return;
+
+    // Hydrate the editable DOM once even when the source is empty. Comparing
+    // only htmlToMarkdown(element) to markdown treats an empty root as already
+    // rendered and leaves the intended editable paragraph out of the page.
+    const firstRender = renderedMarkdownRef.current === undefined;
+    const sourceChanged = renderedMarkdownRef.current !== markdown;
+    if (firstRender || (sourceChanged && htmlToMarkdown(element) !== markdown)) {
+      element.innerHTML = markdownToHtml(markdown);
+    }
+    renderedMarkdownRef.current = markdown;
   }, [markdown]);
 
   return <div
