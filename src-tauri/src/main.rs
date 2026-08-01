@@ -478,6 +478,19 @@ fn reindex_scene_positions(scenes: &mut [Scene], scene_set_id: &str) {
     for (position, index) in order.into_iter().enumerate() { scenes[index].position = position as i64; }
 }
 
+fn reorder_chapter_positions(chapters: &mut [Chapter], chapter_id: &str, position: i64) -> Result<Vec<Chapter>, String> {
+    let chapter = chapters.iter().find(|chapter| chapter.id == chapter_id).ok_or_else(|| format!("Unknown chapter {chapter_id}"))?;
+    let story_id = chapter.story_id.clone();
+    let mut order: Vec<usize> = chapters.iter().enumerate().filter(|(_, chapter)| chapter.story_id == story_id).map(|(index, _)| index).collect();
+    order.sort_by_key(|&index| chapters[index].position);
+    let from = order.iter().position(|&index| chapters[index].id == chapter_id).ok_or_else(|| format!("Chapter {chapter_id} is not in its story"))?;
+    let moved = order.remove(from);
+    let target = position.max(0).min(order.len() as i64) as usize;
+    order.insert(target, moved);
+    for (position, index) in order.iter().enumerate() { chapters[*index].position = position as i64; }
+    Ok(order.into_iter().map(|index| chapters[index].clone()).collect())
+}
+
 fn reorder_scene_positions(scenes: &mut [Scene], scene_id: &str, position: i64) -> Result<Vec<Scene>, String> {
     let scene = scenes.iter().find(|scene| scene.id == scene_id).ok_or_else(|| format!("Unknown scene {scene_id}"))?;
     let scene_set_id = scene.scene_set_id.clone();
@@ -682,6 +695,8 @@ fn list_scenes(chapter_id: String, scene_set_id: Option<String>, app: State<'_, 
 #[tauri::command]
 fn rename_scene(scene_id: String, title: String, app: State<'_, Mutex<AppState>>) -> Result<Scene, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; if title.trim().is_empty() { return Err("A scene title is required".into()); } let scene = state.store.scenes.iter_mut().find(|item| item.id == scene_id).ok_or_else(|| "Unknown scene".to_string())?; scene.title = title.trim().into(); let result = scene.clone(); status(&mut state, "saved", "Scene title saved"); state.persist()?; Ok(result) }
 #[tauri::command]
+fn reorder_chapter(chapter_id: String, position: i64, app: State<'_, Mutex<AppState>>) -> Result<Vec<Chapter>, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let values = reorder_chapter_positions(&mut state.store.chapters, &chapter_id, position)?; status(&mut state, "saved", "Chapter order saved"); state.persist()?; Ok(values) }
+#[tauri::command]
 fn reorder_scene(scene_id: String, position: i64, app: State<'_, Mutex<AppState>>) -> Result<Vec<Scene>, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let values = reorder_scene_positions(&mut state.store.scenes, &scene_id, position)?; status(&mut state, "saved", "Scene order saved"); state.persist()?; Ok(values) }
 
 #[tauri::command]
@@ -865,7 +880,7 @@ fn project_snapshot(app: State<'_, Mutex<AppState>>) -> Result<ProjectSnapshot, 
 fn write_export(filename: String, bytes: Vec<u8>, app: State<'_, Mutex<AppState>>) -> Result<String, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let root = state.root.as_ref().ok_or_else(|| "No project is open".to_string())?; let weave = root.join(".weave"); ensure_existing_directory(&weave, ".weave directory")?; let exports = weave.join("exports"); ensure_directory_chain(&exports)?; let safe = Path::new(&filename).file_name().filter(|value| *value != "." && *value != "..").ok_or_else(|| "Invalid export filename".to_string())?; let path = exports.join(safe); ensure_safe_write_target(&path, "export file")?; fs::write(&path, bytes).map_err(|e| e.to_string())?; Ok(path.to_string_lossy().into_owned()) }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() { tauri::Builder::default().manage(Mutex::new(AppState::default())).invoke_handler(tauri::generate_handler![create_project, open_project, get_project, create_story, create_chapter, create_scene, rename_story, rename_chapter, delete_story, delete_chapter, delete_scene, list_stories, list_chapters, list_scene_sets, list_scenes, rename_scene, reorder_scene, create_markdown_note, update_markdown_note, delete_markdown_note, list_markdown_notes, search_markdown_notes, list_note_links, repair_note_link, create_canvas, update_canvas, delete_canvas, list_canvases, canvas_projection, save_excalidraw_scene, add_canvas_node, remove_canvas_node, save_canvas_layout, get_document, get_revision, get_style_profile, update_style_profile, writing_stats, writing_activity, save_manuscript_version, list_manuscript_versions, get_manuscript_version, compare_manuscript_versions, restore_manuscript_version, set_daily_word_target, enter_continuous_draft, get_continuous_draft, keep_continuous_separate, automatically_split_continuous, compose_chapter, integrity_check, create_backup, recover_from_backup, get_status, project_snapshot, write_export]).run(tauri::generate_context!()).expect("error while running Weave"); }
+pub fn run() { tauri::Builder::default().manage(Mutex::new(AppState::default())).invoke_handler(tauri::generate_handler![create_project, open_project, get_project, create_story, create_chapter, create_scene, rename_story, rename_chapter, delete_story, delete_chapter, delete_scene, list_stories, list_chapters, list_scene_sets, list_scenes, rename_scene, reorder_chapter, reorder_scene, create_markdown_note, update_markdown_note, delete_markdown_note, list_markdown_notes, search_markdown_notes, list_note_links, repair_note_link, create_canvas, update_canvas, delete_canvas, list_canvases, canvas_projection, save_excalidraw_scene, add_canvas_node, remove_canvas_node, save_canvas_layout, get_document, get_revision, get_style_profile, update_style_profile, writing_stats, writing_activity, save_manuscript_version, list_manuscript_versions, get_manuscript_version, compare_manuscript_versions, restore_manuscript_version, set_daily_word_target, enter_continuous_draft, get_continuous_draft, keep_continuous_separate, automatically_split_continuous, compose_chapter, integrity_check, create_backup, recover_from_backup, get_status, project_snapshot, write_export]).run(tauri::generate_context!()).expect("error while running Weave"); }
 
 #[cfg(test)]
 mod tests {
@@ -918,6 +933,15 @@ mod tests {
         assert!(error.contains("symlink"));
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(outside);
+    }
+
+    #[test]
+    fn reorder_chapter_positions_only_reorders_siblings() {
+        let chapter = |id: &str, story_id: &str, position: i64| Chapter { id: id.into(), story_id: story_id.into(), title: id.into(), position, active_scene_set_id: format!("set-{id}") };
+        let mut chapters = vec![chapter("first", "story-a", 0), chapter("second", "story-a", 1), chapter("other-story", "story-b", 0)];
+        let ordered = reorder_chapter_positions(&mut chapters, "second", 0).unwrap();
+        assert_eq!(ordered.iter().map(|item| item.id.as_str()).collect::<Vec<_>>(), vec!["second", "first"]);
+        assert_eq!(chapters.iter().find(|item| item.id == "other-story").unwrap().position, 0);
     }
 
     #[test]

@@ -52,6 +52,7 @@ export class TauriProjectRepository implements ProjectRepository {
   deleteStory(storyId: string): Promise<void> { return command('delete_story', { storyId }); }
   deleteChapter(chapterId: string): Promise<void> { return command('delete_chapter', { chapterId }); }
   deleteScene(sceneId: string): Promise<void> { return command('delete_scene', { sceneId }); }
+  reorderChapter(chapterId: string, position: number): Promise<Chapter[]> { return command('reorder_chapter', { chapterId, position }); }
   reorderScene(sceneId: string, position: number): Promise<Scene[]> { return command('reorder_scene', { sceneId, position }); }
   createMarkdownNote(title: string, markdown?: string): Promise<MarkdownNote> { return command('create_markdown_note', { title, markdown }); }
   updateMarkdownNote(noteId: string, input: { title: string; markdown: string }, expectedRevision: number): Promise<MarkdownNote> { return command('update_markdown_note', { noteId, input, expectedRevision }); }

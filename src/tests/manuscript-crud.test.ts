@@ -37,6 +37,14 @@ describe('manuscript CRUD', () => {
     expect((await repository.getDocument(firstScene.documentId)).document.blocks[0].runs[0].text).toBe('first scene text');
   });
 
+  it('orders chapters independently while leaving scene documents and revisions intact', async () => {
+    const { repository, firstStory, firstChapter, secondChapter, firstScene } = await fixture();
+    const before = await repository.getDocument(firstScene.documentId);
+    await repository.reorderChapter(secondChapter.id, 0);
+    expect((await repository.listChapters(firstStory.id)).map((chapter) => [chapter.id, chapter.position])).toEqual([[secondChapter.id, 0], [firstChapter.id, 1]]);
+    expect(await repository.getDocument(firstScene.documentId)).toEqual(before);
+  });
+
   it('orders siblings by position after reorder and deletion', async () => {
     const { repository, firstChapter, firstScene, secondScene } = await fixture();
     const thirdScene = await repository.createScene(firstChapter.id, 'Third scene');
@@ -114,11 +122,13 @@ describe('SQLite manuscript CRUD', () => {
     await repository.renameStory(story.id, 'Renamed story');
     await repository.renameChapter(chapter.id, 'Renamed chapter');
     await repository.renameScene(scene.id, 'Renamed scene');
+    const secondChapter = await repository.createChapter(story.id, 'Second chapter');
+    await repository.reorderChapter(secondChapter.id, 0);
     repository.close();
 
     const reopened = new SQLiteProjectRepository(directory);
     expect((await reopened.listStories())[0].title).toBe('Renamed story');
-    expect((await reopened.listChapters(story.id))[0].title).toBe('Renamed chapter');
+    expect((await reopened.listChapters(story.id)).map((chapter) => chapter.title)).toEqual(['Second chapter', 'Renamed chapter']);
     await reopened.deleteStory(story.id);
     expect((await reopened.listStories())).toEqual([]);
     expect((await reopened.listChapters())).toEqual([]);
