@@ -158,7 +158,7 @@ describe('offline persistence and accessible workspace', () => {
     expect(app).toContain('Escape');
     expect(app).toContain('worldbuilding-sidebar-group');
     expect(app).toContain('worldbuildingTabs');
-    expect(app).toContain("import { Plus } from 'lucide-react'");
+    expect(app).toContain("import { Pencil, Plus, Trash2 } from 'lucide-react'");
     expect(app).toContain('worldbuilding-sidebar-heading');
     expect(app).toContain('className="worldbuilding-create-icon" aria-label="Create new note" title="Create new note" onClick={createWorldbuildingNote}><Plus');
     expect(app).toContain('className="worldbuilding-create-icon" aria-label="Create new canvas" title="Create new canvas" onClick={createWorldbuildingCanvas}><Plus');

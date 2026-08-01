@@ -12,9 +12,11 @@ describe('Markdown note sidebar actions', () => {
     expect(appSource).toContain('onClick={() => openWorldbuildingTab({ kind: \'note\', id: note.id })}');
     expect(appSource).toContain('event.stopPropagation(); requestRenameNote(note)');
     expect(appSource).toContain('event.stopPropagation(); requestDeleteNote(note)');
-    expect(appSource).toContain('>Rename</button>');
-    expect(appSource).toContain('>Delete</button>');
-    expect(appSource).not.toContain('Trash');
+    expect(appSource).toContain("import { Pencil, Plus, Trash2 } from 'lucide-react'");
+    expect(appSource).toContain('<Pencil size={14} strokeWidth={2} aria-hidden="true" />');
+    expect(appSource).toContain('<Trash2 size={14} strokeWidth={2} aria-hidden="true" />');
+    expect(appSource).not.toContain('worldbuilding-sidebar-note-action">Rename');
+    expect(appSource).not.toContain('worldbuilding-sidebar-note-delete" aria-label={`Delete ${note.title}`} onClick');
   });
 
   it('keeps rename and delete out of the note editor header', () => {
