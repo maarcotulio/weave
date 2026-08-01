@@ -1,9 +1,11 @@
-# Weave
+![Weave](assets/banner.svg)
 
-Weave is a local-only Tauri 2 desktop writing and worldbuilding application built with a React/TypeScript renderer and a Rust backend.
-The renderer talks through the typed repository contract and Tauri adapter; Rust persists project data in SQLite and applies filesystem safeguards.
-Each opened project visibly stores its data in `<project>/.weave/`, including `project.db`, `files/`, `backups/`, and `exports/`.
-There is no cloud service, sync, AI, Docker runtime, or network dependency.
+![Tauri 2](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)
+![React 18](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
+![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
+![Local-first](https://img.shields.io/badge/local--first-no%20cloud%2C%20no%20sync-8f8fd9)
+
+Weave is a local-only Tauri 2 desktop app for writing and worldbuilding. A React/TypeScript renderer talks through a typed repository contract and Tauri adapter; a Rust backend persists everything in SQLite and applies filesystem safeguards. Every opened project visibly stores its data in `<project>/.weave/` (`project.db`, `files/`, `backups/`, `exports/`). There is no cloud service, sync, AI, Docker runtime, or network dependency.
 
 ## Completed phases
 
@@ -15,21 +17,21 @@ There is no cloud service, sync, AI, Docker runtime, or network dependency.
 
 ## Product patterns
 
-Canonical structured manuscript data is persisted separately from presentation settings such as font, spacing, and page size.
-Continuous-to-scene splitting is deterministic and recognizes only whole paragraphs containing `***` or `Nova cena`; no marker means no split.
-Autosave is local, revision-aware, and flushed on navigation, mode changes, exports, backups, and close; failed saves remain retryable.
-Markdown notes recognize only exact `[[Target]]` and `[[Target|label]]` links, with unique local-note resolution and repairable unresolved links. Notes keep Markdown as their canonical source while their editor is presented as paginated writing paper.
-Each canvas persists an explicit `react-flow` or `excalidraw` engine. Existing records migrate to `react-flow`; React Flow positions/viewport remain projection/layout data separate from note Markdown, while Excalidraw stores JSON-safe elements, app state, and local files with revision checks.
-The theme choice is presentation-only: it is stored in browser/webview local storage under `weave.theme`, never in the project repository, and defaults to light when absent or unavailable. The inline bootstrap applies a valid saved choice before the renderer loads to avoid a light-mode flash.
+- Canonical structured manuscript data is persisted separately from presentation settings such as font, spacing, and page size.
+- Continuous-to-scene splitting is deterministic and recognizes only whole paragraphs containing `***` or `Nova cena`; no marker means no split.
+- Autosave is local, revision-aware, and flushed on navigation, mode changes, exports, backups, and close; failed saves remain retryable.
+- Markdown notes recognize only exact `[[Target]]` and `[[Target|label]]` links, with unique local-note resolution and repairable unresolved links. Notes keep Markdown as their canonical source while their editor is presented as paginated writing paper.
+- Each canvas persists an explicit `react-flow` or `excalidraw` engine. Existing records migrate to `react-flow`; React Flow positions/viewport remain projection/layout data separate from note Markdown, while Excalidraw stores JSON-safe elements, app state, and local files with revision checks.
+- The theme choice is presentation-only: it is stored in browser/webview local storage under `weave.theme`, never in the project repository, and defaults to light when absent or unavailable. The inline bootstrap applies a valid saved choice before the renderer loads to avoid a light-mode flash.
 
-## Run and validate
+## Getting started
 
 ```sh
-npm ci
-npm test
-npm run build
-npm run desktop:dev    # requires the Tauri 2 system toolchain
-npm run desktop:build  # requires the Tauri 2 system toolchain
+npm ci                   # install dependencies
+npm test                 # run the test suite (vitest)
+npm run build             # typecheck + production build (vite)
+npm run desktop:dev       # run the desktop app (requires the Tauri 2 system toolchain)
+npm run desktop:build     # build the desktop app (requires the Tauri 2 system toolchain)
 ```
 
 If Vite reports `Failed to resolve import "@excalidraw/excalidraw"`, the local dependency tree is incomplete; run `npm ci` from the repository root before changing source imports. The Vite/browser fallback uses the in-memory repository for UI work; the desktop build uses SQLite through `src-tauri/`.
@@ -38,11 +40,13 @@ Excalidraw uses the maintained `@excalidraw/excalidraw` **0.18.1** package (MIT 
 
 ## Authoritative boundaries
 
-- `src/domain/` contains document types, deterministic scene rules, goals, pagination, autosave, and the repository contract.
-- `src/infrastructure/` contains the SQLite repository and typed Tauri adapter.
-- `src/export/` contains deterministic editorial exporters.
-- `src/app/` contains renderer and UI behavior, including the Worldbuilding workspace and React Flow projection.
-- `src-tauri/` contains the Rust commands and desktop filesystem/SQLite integration.
+| Path | Owns |
+| --- | --- |
+| `src/domain/` | Document types, deterministic scene rules, goals, pagination, autosave, and the repository contract |
+| `src/infrastructure/` | The SQLite repository and typed Tauri adapter |
+| `src/export/` | Deterministic editorial exporters |
+| `src/app/` | Renderer and UI behavior, including the Worldbuilding workspace and React Flow projection |
+| `src-tauri/` | Rust commands and desktop filesystem/SQLite integration |
 
 ## Planned roadmap
 

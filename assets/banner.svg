@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300" role="img" aria-labelledby="weave-banner-title weave-banner-desc">
+  <title id="weave-banner-title">Weave</title>
+  <desc id="weave-banner-desc">Local-first writing and worldbuilding, woven on your machine.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1b1a2e" />
+      <stop offset="100%" stop-color="#2c2148" />
+    </linearGradient>
+    <linearGradient id="threadWarm" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#e8b34c" />
+      <stop offset="100%" stop-color="#d97757" />
+    </linearGradient>
+    <linearGradient id="threadCool" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#6fb3c2" />
+      <stop offset="100%" stop-color="#8f8fd9" />
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="300" rx="18" fill="url(#bg)" />
+
+  <!-- woven thread motif -->
+  <g fill="none" stroke-linecap="round" opacity="0.9">
+    <path d="M 60 60 C 130 60, 130 150, 60 150 C -10 150, -10 240, 60 240"
+          stroke="url(#threadWarm)" stroke-width="7" />
+    <path d="M 130 60 C 60 60, 60 150, 130 150 C 200 150, 200 240, 130 240"
+          stroke="url(#threadCool)" stroke-width="7" />
+    <path d="M 200 60 C 270 60, 270 150, 200 150 C 130 150, 130 240, 200 240"
+          stroke="url(#threadWarm)" stroke-width="7" opacity="0.55" />
+  </g>
+
+  <!-- wordmark -->
+  <text x="330" y="168" font-family="Georgia, 'Iowan Old Style', 'Palatino Linotype', serif"
+        font-size="92" font-weight="700" fill="#f4efe3" letter-spacing="1">Weave</text>
+
+  <!-- tagline -->
+  <text x="333" y="212" font-family="'Segoe UI', system-ui, -apple-system, sans-serif"
+        font-size="24" font-weight="400" fill="#c9c3e0" letter-spacing="0.4">Local-first writing and worldbuilding, woven on your machine.</text>
+
+  <!-- fine rule under tagline -->
+  <line x1="333" y1="230" x2="900" y2="230" stroke="#4a4270" stroke-width="1.5" />
+</svg>
