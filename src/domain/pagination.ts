@@ -1,5 +1,5 @@
 import { blockText, cloneDocument } from './document';
-import type { DocumentBlock, EditorStyleProfile, PageSize, StructuredDocument, TextRun } from './types';
+import { DEFAULT_TEXT_MARGINS, type DocumentBlock, type EditorStyleProfile, type PageSize, type StructuredDocument, type TextMargins, type TextRun } from './types';
 
 export interface PageDimensions {
   widthPx: number;
@@ -80,9 +80,13 @@ export function canonicalOffsetToPage(pages: readonly PaginatedPage[], sourceBlo
   return { pageIndex: last.pageIndex, blockId: last.block.id, sourceBlockId, offset: last.metadata.end - last.metadata.start };
 }
 
-export function pageTextHeight(pageSize: PageSize = 'letter'): number {
+export function effectiveTextMargins(style?: Pick<EditorStyleProfile, 'textMargins'>): TextMargins {
+  return { ...DEFAULT_TEXT_MARGINS, ...(style?.textMargins ?? {}) };
+}
+
+export function pageTextHeight(pageSize: PageSize = 'letter', margins: TextMargins = DEFAULT_TEXT_MARGINS): number {
   const dimensions = pageDimensions(pageSize);
-  return dimensions.heightPx - PAGE_LAYOUT.pageBorderPx - PAGE_LAYOUT.pagePaddingTopPx - PAGE_LAYOUT.pagePaddingBottomPx - PAGE_LAYOUT.metaHeightPx - PAGE_LAYOUT.editorTopPaddingPx - PAGE_LAYOUT.footerHeightPx;
+  return dimensions.heightPx - PAGE_LAYOUT.pageBorderPx - margins.top - margins.bottom - PAGE_LAYOUT.metaHeightPx - PAGE_LAYOUT.editorTopPaddingPx - PAGE_LAYOUT.footerHeightPx;
 }
 
 function lineHeightFor(style: EditorStyleProfile): number {
@@ -163,10 +167,12 @@ function normalizePageFragments(pages: PaginatedPage[]): PaginatedPage[] {
 export function paginateDocumentWithSources(document: StructuredDocument, style: EditorStyleProfile, availableWidthPx?: number): PaginatedPage[] {
   const dimensions = pageDimensions(style.pageSize);
   const blockAllowance = Math.max(2, Math.ceil(64 / lineHeightFor(style)));
-  const renderedWidth = availableWidthPx ? Math.min(dimensions.widthPx, Math.max(PAGE_LAYOUT.horizontalPaddingPx + 120, availableWidthPx)) : dimensions.widthPx;
-  const contentWidth = renderedWidth - PAGE_LAYOUT.horizontalPaddingPx;
+  const margins = effectiveTextMargins(style);
+  const horizontalPadding = margins.left + margins.right;
+  const renderedWidth = availableWidthPx ? Math.min(dimensions.widthPx, Math.max(horizontalPadding + 120, availableWidthPx)) : dimensions.widthPx;
+  const contentWidth = renderedWidth - horizontalPadding;
   const charactersPerLine = Math.max(24, Math.floor(contentWidth / (style.fontSizePt * 0.62)));
-  const linesPerPage = Math.max(8, Math.floor(pageTextHeight(style.pageSize) / lineHeightFor(style)));
+  const linesPerPage = Math.max(8, Math.floor(pageTextHeight(style.pageSize, margins) / lineHeightFor(style)));
   const pages: PaginatedPage[] = [];
   let blocks: PaginatedBlock[] = [];
   let usedLines = 0;

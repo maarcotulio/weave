@@ -71,6 +71,26 @@ describe('notes-only worldbuilding', () => {
     await expect(repository.saveExcalidrawScene(reactFlow.id, { elements: [], appState: {}, files: {} }, reactFlow.revision)).rejects.toThrow('only be saved');
   });
 
+  it('renames canvases with revision checks and deletes only projection records', async () => {
+    const { repository, story } = await fixture();
+    const source = await repository.createMarkdownNote('Source', '[[Target]]');
+    const target = await repository.createMarkdownNote('Target', '');
+    const savedSource = await repository.updateMarkdownNote(source.id, { title: source.title, markdown: source.markdown }, source.revision);
+    const canvas = await repository.createCanvas(story.id, 'Original', 'excalidraw');
+    const sourceNode = await repository.addCanvasNode(canvas.id, savedSource.id, { x: 1, y: 2 }, canvas.revision);
+    const projection = await repository.getCanvasProjection(canvas.id);
+    const targetNode = await repository.addCanvasNode(canvas.id, target.id, { x: 3, y: 4 }, projection.canvas.revision);
+    const laidOut = await repository.saveCanvasLayout(canvas.id, [{ id: sourceNode.id, position: { x: 10, y: 20 } }, { id: targetNode.id, position: { x: 30, y: 40 } }], { x: 5, y: 6, zoom: 1.2 }, (await repository.getCanvasProjection(canvas.id)).canvas.revision);
+    const renamed = await repository.updateCanvas(canvas.id, { title: 'Renamed' }, laidOut.revision);
+    expect(renamed).toMatchObject({ title: 'Renamed', engine: 'excalidraw', viewport: { x: 5, y: 6, zoom: 1.2 }, revision: laidOut.revision + 1 });
+    await expect(repository.updateCanvas(canvas.id, { title: 'Stale' }, laidOut.revision)).rejects.toThrow('changed');
+    await expect(repository.updateCanvas(canvas.id, { title: '   ' }, renamed.revision)).rejects.toThrow('title is required');
+    await repository.deleteCanvas(canvas.id, renamed.revision);
+    expect(await repository.listCanvases(story.id)).toEqual([]);
+    expect(await repository.listMarkdownNotes()).toEqual(expect.arrayContaining([expect.objectContaining({ id: source.id }), expect.objectContaining({ id: target.id })]));
+    await expect(repository.getCanvasProjection(canvas.id)).rejects.toThrow('Unknown canvas');
+  });
+
   it('accepts only notes as canvas nodes and keeps deletions reference-safe', async () => {
     const { repository, story } = await fixture();
     const source = await repository.createMarkdownNote('Source', '[[Target]]');
@@ -118,6 +138,28 @@ describe('offline persistence and accessible workspace', () => {
     reopened.close();
   });
 
+  it('persists canvas rename and deletion cascades through SQLite', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'weave-world-canvas-crud-'));
+    const repository = new SQLiteProjectRepository(directory);
+    await repository.createProject(directory, 'Offline');
+    const story = await repository.createStory('Story');
+    const note = await repository.createMarkdownNote('Placed note', '');
+    const canvas = await repository.createCanvas(story.id, 'Original');
+    await repository.addCanvasNode(canvas.id, note.id, { x: 8, y: 9 }, canvas.revision);
+    const current = (await repository.listCanvases(story.id))[0];
+    await repository.updateCanvas(canvas.id, { title: 'Renamed' }, current.revision);
+    repository.close();
+    const reopened = new SQLiteProjectRepository(directory);
+    expect((await reopened.listCanvases(story.id))[0].title).toBe('Renamed');
+    const renamed = (await reopened.listCanvases(story.id))[0];
+    await reopened.deleteCanvas(renamed.id, renamed.revision);
+    reopened.close();
+    const final = new SQLiteProjectRepository(directory);
+    expect(await final.listCanvases(story.id)).toEqual([]);
+    expect(await final.listMarkdownNotes()).toEqual([expect.objectContaining({ id: note.id, title: 'Placed note' })]);
+    final.close();
+  });
+
   it('keeps Worldbuilding tab activation, close semantics, and close-control alignment intact', () => {
     const component = readFileSync(join(process.cwd(), 'src/app/Worldbuilding.tsx'), 'utf8');
     const styles = readFileSync(join(process.cwd(), 'src/app/styles.css'), 'utf8');
@@ -160,6 +202,14 @@ describe('offline persistence and accessible workspace', () => {
     expect(app).toContain('worldbuildingTabs');
     expect(app).toContain("import { Pencil, Plus, Trash2 } from 'lucide-react'");
     expect(app).toContain('worldbuilding-sidebar-heading');
+    expect(app).toContain('worldbuilding-sidebar-canvas-row');
+    expect(app).toContain('worldbuilding-sidebar-canvas-actions');
+    expect(app).toContain('requestRenameCanvas(canvas)');
+    expect(app).toContain('requestDeleteCanvas(canvas)');
+    expect(app).toContain('repository.updateCanvas(canvas.id, { title: nextTitle.trim() }, canvas.revision)');
+    expect(app).toContain('repository.deleteCanvas(canvas.id, canvas.revision)');
+    expect(app).toContain('CanvasRenameDialog');
+    expect(app).toContain('CanvasDeleteDialog');
     expect(app).toContain('className="worldbuilding-create-icon" aria-label="Create new note" title="Create new note" onClick={createWorldbuildingNote}><Plus');
     expect(app).toContain('className="worldbuilding-create-icon" aria-label="Create new canvas" title="Create new canvas" onClick={createWorldbuildingCanvas}><Plus');
     expect(readFileSync(join(process.cwd(), 'package.json'), 'utf8')).toContain('"lucide-react"');

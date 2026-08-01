@@ -16,6 +16,11 @@ import type {
   StructuredDocument,
   WritingGoals,
   WritingStats,
+  WritingActivity,
+  ManuscriptVersionSummary,
+  ManuscriptVersionDetail,
+  ManuscriptVersionComparison,
+  RestoreManuscriptVersionResult,
   MarkdownNote,
   NoteLink,
   StoryCanvas,
@@ -41,7 +46,12 @@ export class TauriProjectRepository implements ProjectRepository {
   listChapters(storyId?: string): Promise<Chapter[]> { return command('list_chapters', { storyId }); }
   listSceneSets(chapterId: string): Promise<SceneSet[]> { return command('list_scene_sets', { chapterId }); }
   listScenes(chapterId: string, sceneSetId?: string): Promise<Scene[]> { return command('list_scenes', { chapterId, sceneSetId }); }
+  renameStory(storyId: string, title: string): Promise<Story> { return command('rename_story', { storyId, title }); }
+  renameChapter(chapterId: string, title: string): Promise<Chapter> { return command('rename_chapter', { chapterId, title }); }
   renameScene(sceneId: string, title: string): Promise<Scene> { return command('rename_scene', { sceneId, title }); }
+  deleteStory(storyId: string): Promise<void> { return command('delete_story', { storyId }); }
+  deleteChapter(chapterId: string): Promise<void> { return command('delete_chapter', { chapterId }); }
+  deleteScene(sceneId: string): Promise<void> { return command('delete_scene', { sceneId }); }
   reorderScene(sceneId: string, position: number): Promise<Scene[]> { return command('reorder_scene', { sceneId, position }); }
   createMarkdownNote(title: string, markdown?: string): Promise<MarkdownNote> { return command('create_markdown_note', { title, markdown }); }
   updateMarkdownNote(noteId: string, input: { title: string; markdown: string }, expectedRevision: number): Promise<MarkdownNote> { return command('update_markdown_note', { noteId, input, expectedRevision }); }
@@ -51,6 +61,8 @@ export class TauriProjectRepository implements ProjectRepository {
   listNoteLinks(noteId?: string): Promise<NoteLink[]> { return command('list_note_links', { noteId }); }
   repairNoteLink(linkId: string, targetId: string): Promise<NoteLink> { return command('repair_note_link', { linkId, targetId }); }
   createCanvas(storyId: string, title: string, engine?: CanvasEngine): Promise<StoryCanvas> { return command('create_canvas', { storyId, title, engine: engine ?? 'react-flow' }); }
+  updateCanvas(canvasId: string, input: { title: string }, expectedRevision: number): Promise<StoryCanvas> { return command('update_canvas', { canvasId, input, expectedRevision }); }
+  deleteCanvas(canvasId: string, expectedRevision: number): Promise<void> { return command('delete_canvas', { canvasId, expectedRevision }); }
   listCanvases(storyId?: string): Promise<StoryCanvas[]> { return command('list_canvases', { storyId }); }
   getCanvasProjection(canvasId: string): Promise<CanvasProjection> { return command('canvas_projection', { canvasId }); }
   saveExcalidrawScene(canvasId: string, scene: ExcalidrawSceneState, expectedRevision: number): Promise<StoryCanvas> { return command('save_excalidraw_scene', { canvasId, scene, expectedRevision }); }
@@ -63,6 +75,12 @@ export class TauriProjectRepository implements ProjectRepository {
   getStyleProfile(): Promise<EditorStyleProfile> { return command('get_style_profile'); }
   updateStyleProfile(profile: EditorStyleProfile): Promise<EditorStyleProfile> { return command('update_style_profile', { profile }); }
   getWritingStats(): Promise<WritingStats> { return command('writing_stats'); }
+  getWritingActivity(days = 365): Promise<WritingActivity[]> { return command('writing_activity', { days }); }
+  saveManuscriptVersion(label: string): Promise<ManuscriptVersionSummary> { return command('save_manuscript_version', { label }); }
+  listManuscriptVersions(): Promise<ManuscriptVersionSummary[]> { return command('list_manuscript_versions'); }
+  getManuscriptVersion(versionId: string): Promise<ManuscriptVersionDetail> { return command('get_manuscript_version', { versionId }); }
+  compareManuscriptVersions(fromVersionId: string, toVersionId: string): Promise<ManuscriptVersionComparison> { return command('compare_manuscript_versions', { fromVersionId, toVersionId }); }
+  restoreManuscriptVersion(versionId: string): Promise<RestoreManuscriptVersionResult> { return command('restore_manuscript_version', { versionId }); }
   setDailyWordTarget(target: number): Promise<WritingGoals> { return command('set_daily_word_target', { target }); }
   enterContinuousDraft(chapterId: string): Promise<ContinuousDraft> { return command('enter_continuous_draft', { chapterId }); }
   getContinuousDraft(draftId: string): Promise<ContinuousDraft> { return command('get_continuous_draft', { draftId }); }

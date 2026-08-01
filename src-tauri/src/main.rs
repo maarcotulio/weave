@@ -62,6 +62,9 @@ struct CanvasViewport { x: f64, y: f64, zoom: f64 }
 struct CanvasPosition { x: f64, y: f64 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct CanvasTitleInput { title: String }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct StoryCanvas { id: String, story_id: String, title: String, viewport: CanvasViewport, #[serde(default = "default_canvas_engine")] engine: String, #[serde(default, skip_serializing_if = "Option::is_none")] excalidraw_state: Option<serde_json::Value>, revision: i64, created_at: String, updated_at: String }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,13 +81,13 @@ struct CanvasProjection { canvas: StoryCanvas, nodes: Vec<CanvasProjectionNode>,
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CanvasPositionUpdate { id: String, position: CanvasPosition }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TextRun { text: String, marks: Vec<String> }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DocumentBlock { id: String, kind: String, #[serde(skip_serializing_if = "Option::is_none")] heading_level: Option<u8>, #[serde(skip_serializing_if = "Option::is_none")] alignment: Option<String>, runs: Vec<TextRun> }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Document { format_version: u8, blocks: Vec<DocumentBlock> }
 #[derive(Clone, Serialize, Deserialize)]
@@ -93,6 +96,32 @@ struct Revision { id: String, document_id: String, number: i64, document: Docume
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DocumentRecord { id: String, head_revision: i64, revisions: Vec<Revision> }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ManuscriptVersionSummary { id: String, project_id: String, label: String, created_at: String, word_count: i64, scene_count: i64, chapter_count: i64 }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ManuscriptVersionDocument { document_id: String, revision: Revision }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ManuscriptVersionSnapshot {
+    #[serde(default)] stories: Vec<Story>, #[serde(default)] chapters: Vec<Chapter>, #[serde(default)] scene_sets: Vec<SceneSet>, #[serde(default)] scenes: Vec<Scene>, #[serde(default)] continuous_drafts: Vec<ContinuousDraft>, #[serde(default)] documents: Vec<ManuscriptVersionDocument>
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredManuscriptVersion { summary: ManuscriptVersionSummary, snapshot: ManuscriptVersionSnapshot }
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManuscriptVersionDetail { summary: ManuscriptVersionSummary, snapshot: ManuscriptVersionSnapshot }
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManuscriptVersionChange { kind: String, change: String, id: String, #[serde(skip_serializing_if = "Option::is_none")] label: Option<String>, #[serde(skip_serializing_if = "Option::is_none")] before_label: Option<String>, #[serde(skip_serializing_if = "Option::is_none")] after_label: Option<String>, #[serde(skip_serializing_if = "Option::is_none")] before_document: Option<Document>, #[serde(skip_serializing_if = "Option::is_none")] after_document: Option<Document> }
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManuscriptVersionComparison { from: ManuscriptVersionSummary, to: ManuscriptVersionSummary, changes: Vec<ManuscriptVersionChange> }
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RestoreManuscriptVersionResult { status: OperationStatus, backup: BackupRecord }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ContinuousDraft { id: String, chapter_id: String, document_id: String, base_scene_set_id: String, source_revision_id: String, status: String, created_at: String }
@@ -104,10 +133,16 @@ struct BackupRecord { id: String, path: String, created_at: String, integrity: S
 struct OperationStatus { state: String, message: String, at: String }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct EditorStyleProfile { font_family: String, font_size_pt: f64, line_spacing: String, #[serde(default = "default_page_size")] page_size: String }
+struct TextMargins { top: f64, right: f64, bottom: f64, left: f64 }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EditorStyleProfile { font_family: String, font_size_pt: f64, line_spacing: String, #[serde(default = "default_page_size")] page_size: String, #[serde(default = "default_text_margins")] text_margins: TextMargins }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WritingGoals { daily_target: i64, daily_word_counts: std::collections::HashMap<String, i64> }
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WritingActivity { date: String, words: i64 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WritingStats { date: String, daily_target: i64, daily_words: i64, project_words: i64 }
@@ -115,14 +150,14 @@ struct WritingStats { date: String, daily_target: i64, daily_words: i64, project
 #[serde(rename_all = "camelCase")]
 struct Store {
     project: Option<Project>, stories: Vec<Story>, chapters: Vec<Chapter>, scene_sets: Vec<SceneSet>, scenes: Vec<Scene>, documents: Vec<DocumentRecord>, drafts: Vec<ContinuousDraft>, backups: Vec<BackupRecord>,
-    #[serde(default)] worldbuilding_items: Vec<WorldbuildingItem>, #[serde(default)] relationships: Vec<DomainRelationship>, #[serde(default)] document_links: Vec<DocumentLink>, #[serde(default)] markdown_notes: Vec<MarkdownNote>, #[serde(default)] note_links: Vec<NoteLink>, #[serde(default)] canvases: Vec<StoryCanvas>, #[serde(default)] canvas_nodes: Vec<CanvasNode>, #[serde(default)] canvas_edges: Vec<CanvasEdge>,
+    #[serde(default)] worldbuilding_items: Vec<WorldbuildingItem>, #[serde(default)] relationships: Vec<DomainRelationship>, #[serde(default)] document_links: Vec<DocumentLink>, #[serde(default)] markdown_notes: Vec<MarkdownNote>, #[serde(default)] note_links: Vec<NoteLink>, #[serde(default)] canvases: Vec<StoryCanvas>, #[serde(default)] canvas_nodes: Vec<CanvasNode>, #[serde(default)] canvas_edges: Vec<CanvasEdge>, #[serde(default)] manuscript_versions: Vec<StoredManuscriptVersion>,
     #[serde(default = "default_style_profile")] style_profile: EditorStyleProfile,
     #[serde(default = "default_writing_goals")] writing_goals: WritingGoals,
     status: OperationStatus,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ProjectSnapshot { project: Project, stories: Vec<Story>, chapters: Vec<Chapter>, scene_sets: Vec<SceneSet>, scenes: Vec<Scene>, continuous_drafts: Vec<ContinuousDraft>, markdown_notes: Vec<MarkdownNote>, note_links: Vec<NoteLink>, canvases: Vec<StoryCanvas>, style_profile: EditorStyleProfile, writing_stats: WritingStats, status: OperationStatus }
+struct ProjectSnapshot { project: Project, stories: Vec<Story>, chapters: Vec<Chapter>, scene_sets: Vec<SceneSet>, scenes: Vec<Scene>, continuous_drafts: Vec<ContinuousDraft>, markdown_notes: Vec<MarkdownNote>, note_links: Vec<NoteLink>, canvases: Vec<StoryCanvas>, backups: Vec<BackupRecord>, style_profile: EditorStyleProfile, writing_stats: WritingStats, writing_activity: Vec<WritingActivity>, manuscript_versions: Vec<ManuscriptVersionSummary>, status: OperationStatus }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DocumentHead { document_id: String, document: Document, revision: i64, revision_id: String }
@@ -138,12 +173,13 @@ struct SplitResult { scene_set: SceneSet, scenes: Vec<Scene>, source_revision_id
 
 fn empty_properties() -> serde_json::Value { serde_json::json!({}) }
 fn default_page_size() -> String { "letter".into() }
+fn default_text_margins() -> TextMargins { TextMargins { top: 44.0, right: 72.0, bottom: 30.0, left: 72.0 } }
 fn default_canvas_engine() -> String { "react-flow".into() }
 fn valid_canvas_engine(value: &str) -> bool { value == "react-flow" || value == "excalidraw" }
-fn default_style_profile() -> EditorStyleProfile { EditorStyleProfile { font_family: "Times New Roman".into(), font_size_pt: 12.0, line_spacing: "double".into(), page_size: default_page_size() } }
+fn default_style_profile() -> EditorStyleProfile { EditorStyleProfile { font_family: "Times New Roman".into(), font_size_pt: 12.0, line_spacing: "double".into(), page_size: default_page_size(), text_margins: default_text_margins() } }
 fn default_writing_goals() -> WritingGoals { WritingGoals { daily_target: 500, daily_word_counts: std::collections::HashMap::new() } }
 impl Default for OperationStatus { fn default() -> Self { Self { state: "idle".into(), message: "Ready".into(), at: timestamp() } } }
-impl Default for Store { fn default() -> Self { Self { project: None, stories: vec![], chapters: vec![], scene_sets: vec![], scenes: vec![], documents: vec![], drafts: vec![], backups: vec![], worldbuilding_items: vec![], relationships: vec![], document_links: vec![], markdown_notes: vec![], note_links: vec![], canvases: vec![], canvas_nodes: vec![], canvas_edges: vec![], style_profile: default_style_profile(), writing_goals: default_writing_goals(), status: OperationStatus::default() } } }
+impl Default for Store { fn default() -> Self { Self { project: None, stories: vec![], chapters: vec![], scene_sets: vec![], scenes: vec![], documents: vec![], drafts: vec![], backups: vec![], worldbuilding_items: vec![], relationships: vec![], document_links: vec![], markdown_notes: vec![], note_links: vec![], canvases: vec![], canvas_nodes: vec![], canvas_edges: vec![], manuscript_versions: vec![], style_profile: default_style_profile(), writing_goals: default_writing_goals(), status: OperationStatus::default() } } }
 
 struct AppState { root: Option<PathBuf>, store: Store }
 impl Default for AppState { fn default() -> Self { Self { root: None, store: Store::default() } } }
@@ -245,8 +281,129 @@ fn project_word_count(store: &Store) -> i64 {
 }
 fn local_date() -> String { Local::now().format("%Y-%m-%d").to_string() }
 fn make_writing_stats(store: &Store) -> WritingStats { let date = local_date(); WritingStats { date: date.clone(), daily_target: store.writing_goals.daily_target, daily_words: *store.writing_goals.daily_word_counts.get(&date).unwrap_or(&0), project_words: project_word_count(store) } }
+fn make_writing_activity(store: &Store, days: usize) -> Vec<WritingActivity> {
+    let mut values: Vec<WritingActivity> = store.writing_goals.daily_word_counts.iter().map(|(date, words)| WritingActivity { date: date.clone(), words: (*words).max(0) }).collect();
+    values.sort_by(|left, right| left.date.cmp(&right.date));
+    if values.len() > days { values.drain(0..values.len() - days); }
+    values
+}
+fn manuscript_version_summaries(store: &Store) -> Vec<ManuscriptVersionSummary> {
+    let mut values: Vec<ManuscriptVersionSummary> = store.manuscript_versions.iter().rev().map(|version| version.summary.clone()).collect();
+    values.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    values
+}
+fn manuscript_version<'a>(store: &'a Store, version_id: &str) -> Result<&'a StoredManuscriptVersion, String> { store.manuscript_versions.iter().find(|version| version.summary.id == version_id).ok_or_else(|| format!("Unknown manuscript version {version_id}")) }
+fn manuscript_version_detail(store: &Store, version_id: &str) -> Result<ManuscriptVersionDetail, String> { let version = manuscript_version(store, version_id)?; Ok(ManuscriptVersionDetail { summary: version.summary.clone(), snapshot: version.snapshot.clone() }) }
+fn json_record_changes(kind: &str, before: Vec<serde_json::Value>, after: Vec<serde_json::Value>) -> Vec<ManuscriptVersionChange> {
+    let mut left = std::collections::BTreeMap::new(); let mut right = std::collections::BTreeMap::new();
+    for value in before { if let Some(id) = value.get("id").and_then(|value| value.as_str()) { left.insert(id.to_string(), value); } }
+    for value in after { if let Some(id) = value.get("id").and_then(|value| value.as_str()) { right.insert(id.to_string(), value); } }
+    let mut ids: Vec<String> = left.keys().chain(right.keys()).cloned().collect(); ids.sort(); ids.dedup();
+    ids.into_iter().filter_map(|id| { let previous = left.get(&id); let next = right.get(&id); match (previous, next) {
+        (None, Some(value)) => Some(ManuscriptVersionChange { kind: kind.into(), change: "added".into(), id, label: value.get("title").and_then(|value| value.as_str()).map(str::to_string), before_label: None, after_label: None, before_document: None, after_document: None }),
+        (Some(value), None) => Some(ManuscriptVersionChange { kind: kind.into(), change: "removed".into(), id, label: value.get("title").and_then(|value| value.as_str()).map(str::to_string), before_label: None, after_label: None, before_document: None, after_document: None }),
+        (Some(previous), Some(next)) if previous != next => Some(ManuscriptVersionChange { kind: kind.into(), change: "changed".into(), id, label: None, before_label: previous.get("title").and_then(|value| value.as_str()).map(str::to_string), after_label: next.get("title").and_then(|value| value.as_str()).map(str::to_string), before_document: None, after_document: None }),
+        _ => None
+    }}).collect()
+}
+fn manuscript_document_changes(before: &[ManuscriptVersionDocument], after: &[ManuscriptVersionDocument]) -> Vec<ManuscriptVersionChange> {
+    let left: std::collections::BTreeMap<String, &ManuscriptVersionDocument> = before.iter().map(|value| (value.document_id.clone(), value)).collect();
+    let right: std::collections::BTreeMap<String, &ManuscriptVersionDocument> = after.iter().map(|value| (value.document_id.clone(), value)).collect();
+    let mut ids: Vec<String> = left.keys().chain(right.keys()).cloned().collect(); ids.sort(); ids.dedup();
+    ids.into_iter().filter_map(|id| { let previous = left.get(&id).copied(); let next = right.get(&id).copied(); match (previous, next) {
+        (None, Some(value)) => Some(ManuscriptVersionChange { kind: "document".into(), change: "added".into(), id, label: None, before_label: None, after_label: None, before_document: None, after_document: Some(value.revision.document.clone()) }),
+        (Some(value), None) => Some(ManuscriptVersionChange { kind: "document".into(), change: "removed".into(), id, label: None, before_label: None, after_label: None, before_document: Some(value.revision.document.clone()), after_document: None }),
+        (Some(previous), Some(next)) if previous.revision.document != next.revision.document => Some(ManuscriptVersionChange { kind: "document".into(), change: "changed".into(), id, label: None, before_label: None, after_label: None, before_document: Some(previous.revision.document.clone()), after_document: Some(next.revision.document.clone()) }),
+        _ => None
+    }}).collect()
+}
+fn compare_manuscript_version_values(store: &Store, from_id: &str, to_id: &str) -> Result<ManuscriptVersionComparison, String> {
+    let from = manuscript_version(store, from_id)?; let to = manuscript_version(store, to_id)?; let left = &from.snapshot; let right = &to.snapshot;
+    let mut changes = vec![];
+    changes.extend(json_record_changes("story", left.stories.iter().map(serde_json::to_value).collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?, right.stories.iter().map(serde_json::to_value).collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?));
+    changes.extend(json_record_changes("chapter", left.chapters.iter().map(serde_json::to_value).collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?, right.chapters.iter().map(serde_json::to_value).collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?));
+    changes.extend(json_record_changes("scene-set", left.scene_sets.iter().map(serde_json::to_value).collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?, right.scene_sets.iter().map(serde_json::to_value).collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?));
+    changes.extend(json_record_changes("scene", left.scenes.iter().map(serde_json::to_value).collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?, right.scenes.iter().map(serde_json::to_value).collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?));
+    changes.extend(json_record_changes("continuous-draft", left.continuous_drafts.iter().map(serde_json::to_value).collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?, right.continuous_drafts.iter().map(serde_json::to_value).collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?));
+    changes.extend(manuscript_document_changes(&left.documents, &right.documents));
+    Ok(ManuscriptVersionComparison { from: from.summary.clone(), to: to.summary.clone(), changes })
+}
 fn add_document(store: &mut Store, value: Document, reason: &str) -> Result<DocumentRecord, String> { validate_document(&value)?; let record_id = id("document"); let revision = Revision { id: id("revision"), document_id: record_id.clone(), number: 1, document: value, created_at: timestamp(), reason: reason.into() }; let record = DocumentRecord { id: record_id, head_revision: 1, revisions: vec![revision] }; store.documents.push(record.clone()); Ok(record) }
 fn active_scenes(store: &Store, chapter_id: &str, set_id: &str) -> Vec<Scene> { let mut scenes: Vec<Scene> = store.scenes.iter().filter(|scene| scene.scene_set_id == set_id && store.chapters.iter().any(|chapter| chapter.id == chapter_id)).cloned().collect(); scenes.sort_by_key(|scene| scene.position); scenes }
+fn reindex_scene_positions(scenes: &mut [Scene], scene_set_id: &str) {
+    let mut order: Vec<usize> = scenes.iter().enumerate().filter(|(_, scene)| scene.scene_set_id == scene_set_id).map(|(index, _)| index).collect();
+    order.sort_by_key(|&index| scenes[index].position);
+    for (position, index) in order.into_iter().enumerate() { scenes[index].position = position as i64; }
+}
+
+fn reorder_scene_positions(scenes: &mut [Scene], scene_id: &str, position: i64) -> Result<Vec<Scene>, String> {
+    let scene = scenes.iter().find(|scene| scene.id == scene_id).ok_or_else(|| format!("Unknown scene {scene_id}"))?;
+    let scene_set_id = scene.scene_set_id.clone();
+    let mut order: Vec<usize> = scenes.iter().enumerate().filter(|(_, scene)| scene.scene_set_id == scene_set_id).map(|(index, _)| index).collect();
+    order.sort_by_key(|&index| scenes[index].position);
+    let from = order.iter().position(|&index| scenes[index].id == scene_id).ok_or_else(|| format!("Scene {scene_id} is not in its scene set"))?;
+    let moved = order.remove(from);
+    let target = position.max(0).min(order.len() as i64) as usize;
+    order.insert(target, moved);
+    for (position, index) in order.iter().enumerate() { scenes[*index].position = position as i64; }
+    Ok(order.into_iter().map(|index| scenes[index].clone()).collect())
+}
+fn validate_store(store: &Store) -> Result<(), String> {
+    if store.project.is_none() { return Err("Project metadata is missing".into()); }
+    for document in &store.documents { for revision in &document.revisions { validate_document(&revision.document)?; } }
+    for chapter_value in &store.chapters {
+        if !store.scene_sets.iter().any(|set| set.id == chapter_value.active_scene_set_id && set.chapter_id == chapter_value.id && set.active) { return Err(format!("Chapter {} has no active scene set", chapter_value.id)); }
+    }
+    for note in &store.markdown_notes { if note.title.trim().is_empty() || note.revision < 1 { return Err(format!("Markdown note {} is invalid", note.id)); } }
+    for link in &store.note_links {
+        markdown_note(store, &link.note_id)?;
+        if let Some(target) = &link.target_id { markdown_note(store, target)?; }
+        if link.target_text.trim().is_empty() || link.start < 0 || link.end < link.start { return Err(format!("Markdown link {} is invalid", link.id)); }
+    }
+    for canvas_value in &store.canvases {
+        if !store.stories.iter().any(|story_value| story_value.id == canvas_value.story_id) { return Err(format!("Canvas {} has an unknown story", canvas_value.id)); }
+        if !valid_canvas_engine(&canvas_value.engine) || canvas_value.revision < 1 { return Err(format!("Canvas {} is invalid", canvas_value.id)); }
+    }
+    for node in &store.canvas_nodes {
+        if !store.canvases.iter().any(|canvas_value| canvas_value.id == node.canvas_id) || !store.markdown_notes.iter().any(|note| note.id == node.entity_id) || !valid_position(&node.position) { return Err(format!("Canvas node {} is invalid", node.id)); }
+    }
+    for edge in &store.canvas_edges {
+        if !store.canvas_nodes.iter().any(|node| node.canvas_id == edge.canvas_id && node.id == edge.source_node_id) || !store.canvas_nodes.iter().any(|node| node.canvas_id == edge.canvas_id && node.id == edge.target_node_id) { return Err(format!("Canvas edge {} is invalid", edge.id)); }
+    }
+    Ok(())
+}
+fn ensure_unique_ids<I>(values: I, kind: &str) -> Result<(), String> where I: Iterator<Item = String> {
+    let mut seen = std::collections::HashSet::new();
+    for value in values { if !seen.insert(value.clone()) { return Err(format!("Duplicate {kind} {value}")); } }
+    Ok(())
+}
+fn replace_manuscript_snapshot(store: &mut Store, snapshot: &ManuscriptVersionSnapshot) -> Result<(), String> {
+    let mut candidate = store.clone();
+    ensure_unique_ids(snapshot.stories.iter().map(|value| value.id.clone()), "story")?;
+    ensure_unique_ids(snapshot.chapters.iter().map(|value| value.id.clone()), "chapter")?;
+    ensure_unique_ids(snapshot.scene_sets.iter().map(|value| value.id.clone()), "scene set")?;
+    ensure_unique_ids(snapshot.scenes.iter().map(|value| value.id.clone()), "scene")?;
+    ensure_unique_ids(snapshot.continuous_drafts.iter().map(|value| value.id.clone()), "continuous draft")?;
+    ensure_unique_ids(snapshot.documents.iter().map(|value| value.document_id.clone()), "document")?;
+    let project = candidate.project.as_ref().ok_or_else(|| "Project metadata is missing".to_string())?;
+    let story_ids: std::collections::HashSet<String> = snapshot.stories.iter().map(|value| value.id.clone()).collect();
+    for story in &snapshot.stories { if story.project_id != project.id { return Err(format!("Story {} belongs to a different project", story.id)); } }
+    let chapter_ids: std::collections::HashSet<String> = snapshot.chapters.iter().map(|value| value.id.clone()).collect();
+    for chapter_value in &snapshot.chapters { if !story_ids.contains(&chapter_value.story_id) { return Err(format!("Chapter {} refers to a missing story", chapter_value.id)); } if !snapshot.scene_sets.iter().any(|set| set.id == chapter_value.active_scene_set_id && set.chapter_id == chapter_value.id && set.active) { return Err(format!("Chapter {} has no active scene set", chapter_value.id)); } }
+    let set_ids: std::collections::HashSet<String> = snapshot.scene_sets.iter().map(|value| value.id.clone()).collect();
+    for set in &snapshot.scene_sets { if !chapter_ids.contains(&set.chapter_id) { return Err(format!("Scene set {} refers to a missing chapter", set.id)); } }
+    let document_ids: std::collections::HashSet<String> = snapshot.documents.iter().map(|value| value.document_id.clone()).collect();
+    for scene in &snapshot.scenes { if !set_ids.contains(&scene.scene_set_id) || !document_ids.contains(&scene.document_id) { return Err(format!("Scene {} has an invalid manuscript reference", scene.id)); } }
+    for draft in &snapshot.continuous_drafts { if !chapter_ids.contains(&draft.chapter_id) || !set_ids.contains(&draft.base_scene_set_id) || !document_ids.contains(&draft.document_id) { return Err(format!("Continuous draft {} has an invalid manuscript reference", draft.id)); } }
+    for entry in &snapshot.documents { if entry.document_id != entry.revision.document_id || entry.revision.number < 1 { return Err(format!("Document {} has an invalid revision", entry.document_id)); } validate_document(&entry.revision.document)?; }
+    candidate.stories = snapshot.stories.clone(); candidate.chapters = snapshot.chapters.clone(); candidate.scene_sets = snapshot.scene_sets.clone(); candidate.scenes = snapshot.scenes.clone(); candidate.drafts = snapshot.continuous_drafts.clone(); candidate.documents = snapshot.documents.iter().map(|entry| DocumentRecord { id: entry.document_id.clone(), head_revision: entry.revision.number, revisions: vec![entry.revision.clone()] }).collect();
+    // Canvases and their projection data are explicitly outside manuscript restore. Exclude
+    // them from manuscript validation so historical story deletions do not block restore.
+    candidate.canvases.clear(); candidate.canvas_nodes.clear(); candidate.canvas_edges.clear();
+    validate_store(&candidate)?;
+    *store = { let mut restored = candidate; restored.canvases = store.canvases.clone(); restored.canvas_nodes = store.canvas_nodes.clone(); restored.canvas_edges = store.canvas_edges.clone(); restored };
+    Ok(())
+}
 fn compose(store: &Store, chapter_id: &str) -> Result<Document, String> { let current = chapter(store, chapter_id)?; let scenes = active_scenes(store, chapter_id, &current.active_scene_set_id); let mut blocks = vec![]; for (index, scene) in scenes.iter().enumerate() { if index > 0 { blocks.push(DocumentBlock { id: id("scene-break"), kind: "scene-break".into(), heading_level: None, alignment: None, runs: vec![TextRun { text: String::new(), marks: vec![] }] }); } let record = document_record(store, &scene.document_id)?; let revision = record.revisions.last().ok_or_else(|| "Document has no revision".to_string())?; blocks.extend(revision.document.blocks.clone()); } Ok(Document { format_version: DOCUMENT_FORMAT_VERSION, blocks }) }
 
 #[tauri::command]
@@ -263,6 +420,98 @@ fn create_chapter(story_id: String, title: String, app: State<'_, Mutex<AppState
 #[tauri::command]
 fn create_scene(chapter_id: String, title: String, document: Option<Document>, app: State<'_, Mutex<AppState>>) -> Result<Scene, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let chapter_value = chapter(&state.store, &chapter_id)?.clone(); let record = add_document(&mut state.store, document.unwrap_or_else(empty_document), "created")?; let position = state.store.scenes.iter().filter(|item| item.scene_set_id == chapter_value.active_scene_set_id).count() as i64; let value = Scene { id: id("scene"), scene_set_id: chapter_value.active_scene_set_id, title, position, document_id: record.id }; state.store.scenes.push(value.clone()); state.persist()?; Ok(value) }
 #[tauri::command]
+fn rename_story(story_id: String, title: String, app: State<'_, Mutex<AppState>>) -> Result<Story, String> {
+    let mut state = app.lock().map_err(|_| "Project lock poisoned")?;
+    if title.trim().is_empty() { return Err("A story title is required".into()); }
+    let story = state.store.stories.iter_mut().find(|item| item.id == story_id).ok_or_else(|| format!("Unknown story {story_id}"))?;
+    story.title = title.trim().into();
+    let result = story.clone();
+    status(&mut state, "saved", "Story title saved");
+    state.persist()?;
+    Ok(result)
+}
+
+#[tauri::command]
+fn rename_chapter(chapter_id: String, title: String, app: State<'_, Mutex<AppState>>) -> Result<Chapter, String> {
+    let mut state = app.lock().map_err(|_| "Project lock poisoned")?;
+    if title.trim().is_empty() { return Err("A chapter title is required".into()); }
+    let chapter = state.store.chapters.iter_mut().find(|item| item.id == chapter_id).ok_or_else(|| format!("Unknown chapter {chapter_id}"))?;
+    chapter.title = title.trim().into();
+    let result = chapter.clone();
+    status(&mut state, "saved", "Chapter title saved");
+    state.persist()?;
+    Ok(result)
+}
+
+#[tauri::command]
+fn delete_story(story_id: String, app: State<'_, Mutex<AppState>>) -> Result<(), String> {
+    let mut state = app.lock().map_err(|_| "Project lock poisoned")?;
+    let story = state.store.stories.iter().find(|item| item.id == story_id).cloned().ok_or_else(|| format!("Unknown story {story_id}"))?;
+    let chapter_ids: std::collections::HashSet<String> = state.store.chapters.iter().filter(|item| item.story_id == story_id).map(|item| item.id.clone()).collect();
+    let scene_set_ids: std::collections::HashSet<String> = state.store.scene_sets.iter().filter(|item| chapter_ids.contains(&item.chapter_id)).map(|item| item.id.clone()).collect();
+    let scene_ids: std::collections::HashSet<String> = state.store.scenes.iter().filter(|item| scene_set_ids.contains(&item.scene_set_id)).map(|item| item.id.clone()).collect();
+    let mut document_ids: std::collections::HashSet<String> = state.store.scenes.iter().filter(|item| scene_ids.contains(&item.id)).map(|item| item.document_id.clone()).collect();
+    state.store.drafts.retain(|draft| { if !chapter_ids.contains(&draft.chapter_id) { true } else { document_ids.insert(draft.document_id.clone()); false } });
+    let canvas_ids: std::collections::HashSet<String> = state.store.canvases.iter().filter(|canvas| canvas.story_id == story_id).map(|canvas| canvas.id.clone()).collect();
+    state.store.relationships.retain(|value| !chapter_ids.contains(&value.source_id) && !chapter_ids.contains(&value.target_id) && !scene_ids.contains(&value.source_id) && !scene_ids.contains(&value.target_id));
+    state.store.document_links.retain(|value| !document_ids.contains(&value.anchor.document_id));
+    state.store.canvas_edges.retain(|edge| !canvas_ids.contains(&edge.canvas_id));
+    state.store.canvas_nodes.retain(|node| !canvas_ids.contains(&node.canvas_id) && !chapter_ids.contains(&node.entity_id) && !scene_ids.contains(&node.entity_id));
+    let remaining_nodes: std::collections::HashSet<String> = state.store.canvas_nodes.iter().map(|node| node.id.clone()).collect();
+    state.store.canvas_edges.retain(|edge| remaining_nodes.contains(&edge.source_node_id) && remaining_nodes.contains(&edge.target_node_id));
+    state.store.canvases.retain(|canvas| !canvas_ids.contains(&canvas.id));
+    state.store.documents.retain(|document| !document_ids.contains(&document.id));
+    state.store.scenes.retain(|scene| !scene_ids.contains(&scene.id));
+    state.store.scene_sets.retain(|set| !scene_set_ids.contains(&set.id));
+    state.store.chapters.retain(|chapter| !chapter_ids.contains(&chapter.id));
+    state.store.stories.retain(|candidate| candidate.id != story_id);
+    state.store.stories.sort_by_key(|candidate| candidate.position);
+    for (position, candidate) in state.store.stories.iter_mut().enumerate() { candidate.position = position as i64; }
+    status(&mut state, "saved", &format!("Story “{}” and its manuscript content deleted", story.title));
+    state.persist()
+}
+
+#[tauri::command]
+fn delete_chapter(chapter_id: String, app: State<'_, Mutex<AppState>>) -> Result<(), String> {
+    let mut state = app.lock().map_err(|_| "Project lock poisoned")?;
+    let chapter_value = state.store.chapters.iter().find(|item| item.id == chapter_id).cloned().ok_or_else(|| format!("Unknown chapter {chapter_id}"))?;
+    let scene_set_ids: std::collections::HashSet<String> = state.store.scene_sets.iter().filter(|item| item.chapter_id == chapter_id).map(|item| item.id.clone()).collect();
+    let scene_ids: std::collections::HashSet<String> = state.store.scenes.iter().filter(|item| scene_set_ids.contains(&item.scene_set_id)).map(|item| item.id.clone()).collect();
+    let mut document_ids: std::collections::HashSet<String> = state.store.scenes.iter().filter(|item| scene_ids.contains(&item.id)).map(|item| item.document_id.clone()).collect();
+    state.store.drafts.retain(|draft| { if draft.chapter_id != chapter_id { true } else { document_ids.insert(draft.document_id.clone()); false } });
+    state.store.relationships.retain(|value| value.source_id != chapter_id && value.target_id != chapter_id && !scene_ids.contains(&value.source_id) && !scene_ids.contains(&value.target_id));
+    state.store.document_links.retain(|value| !document_ids.contains(&value.anchor.document_id));
+    state.store.canvas_nodes.retain(|node| node.entity_id != chapter_id && !scene_ids.contains(&node.entity_id));
+    let remaining_nodes: std::collections::HashSet<String> = state.store.canvas_nodes.iter().map(|node| node.id.clone()).collect();
+    state.store.canvas_edges.retain(|edge| remaining_nodes.contains(&edge.source_node_id) && remaining_nodes.contains(&edge.target_node_id));
+    state.store.documents.retain(|document| !document_ids.contains(&document.id));
+    state.store.scenes.retain(|scene| !scene_ids.contains(&scene.id));
+    state.store.scene_sets.retain(|set| !scene_set_ids.contains(&set.id));
+    state.store.chapters.retain(|candidate| candidate.id != chapter_id);
+    state.store.chapters.sort_by_key(|candidate| candidate.position);
+    let mut position = 0i64;
+    for candidate in state.store.chapters.iter_mut().filter(|candidate| candidate.story_id == chapter_value.story_id) { candidate.position = position; position += 1; }
+    status(&mut state, "saved", &format!("Chapter “{}” and its scenes deleted", chapter_value.title));
+    state.persist()
+}
+
+#[tauri::command]
+fn delete_scene(scene_id: String, app: State<'_, Mutex<AppState>>) -> Result<(), String> {
+    let mut state = app.lock().map_err(|_| "Project lock poisoned")?;
+    let scene = state.store.scenes.iter().find(|item| item.id == scene_id).cloned().ok_or_else(|| format!("Unknown scene {scene_id}"))?;
+    state.store.relationships.retain(|value| value.source_id != scene_id && value.target_id != scene_id);
+    state.store.document_links.retain(|value| value.anchor.document_id != scene.document_id);
+    state.store.canvas_nodes.retain(|node| node.entity_id != scene_id);
+    let remaining_nodes: std::collections::HashSet<String> = state.store.canvas_nodes.iter().map(|node| node.id.clone()).collect();
+    state.store.canvas_edges.retain(|edge| remaining_nodes.contains(&edge.source_node_id) && remaining_nodes.contains(&edge.target_node_id));
+    state.store.documents.retain(|document| document.id != scene.document_id);
+    state.store.scenes.retain(|candidate| candidate.id != scene_id);
+    reindex_scene_positions(&mut state.store.scenes, &scene.scene_set_id);
+    status(&mut state, "saved", &format!("Scene “{}” deleted", scene.title));
+    state.persist()
+}
+
+#[tauri::command]
 fn list_stories(app: State<'_, Mutex<AppState>>) -> Result<Vec<Story>, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let mut values = state.store.stories.clone(); values.sort_by_key(|item| item.position); Ok(values) }
 #[tauri::command]
 fn list_chapters(story_id: Option<String>, app: State<'_, Mutex<AppState>>) -> Result<Vec<Chapter>, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let mut values: Vec<Chapter> = state.store.chapters.iter().filter(|item| story_id.as_ref().map(|id| &item.story_id == id).unwrap_or(true)).cloned().collect(); values.sort_by_key(|item| item.position); Ok(values) }
@@ -271,9 +520,9 @@ fn list_scene_sets(chapter_id: String, app: State<'_, Mutex<AppState>>) -> Resul
 #[tauri::command]
 fn list_scenes(chapter_id: String, scene_set_id: Option<String>, app: State<'_, Mutex<AppState>>) -> Result<Vec<Scene>, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let chapter_value = chapter(&state.store, &chapter_id)?; let set = scene_set_id.unwrap_or_else(|| chapter_value.active_scene_set_id.clone()); let mut values: Vec<Scene> = state.store.scenes.iter().filter(|item| item.scene_set_id == set).cloned().collect(); values.sort_by_key(|item| item.position); Ok(values) }
 #[tauri::command]
-fn rename_scene(scene_id: String, title: String, app: State<'_, Mutex<AppState>>) -> Result<Scene, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let scene = state.store.scenes.iter_mut().find(|item| item.id == scene_id).ok_or_else(|| "Unknown scene".to_string())?; scene.title = title; let result = scene.clone(); state.persist()?; Ok(result) }
+fn rename_scene(scene_id: String, title: String, app: State<'_, Mutex<AppState>>) -> Result<Scene, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; if title.trim().is_empty() { return Err("A scene title is required".into()); } let scene = state.store.scenes.iter_mut().find(|item| item.id == scene_id).ok_or_else(|| "Unknown scene".to_string())?; scene.title = title.trim().into(); let result = scene.clone(); status(&mut state, "saved", "Scene title saved"); state.persist()?; Ok(result) }
 #[tauri::command]
-fn reorder_scene(scene_id: String, position: i64, app: State<'_, Mutex<AppState>>) -> Result<Vec<Scene>, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let set_id = state.store.scenes.iter().find(|item| item.id == scene_id).ok_or_else(|| "Unknown scene".to_string())?.scene_set_id.clone(); let mut values: Vec<Scene> = state.store.scenes.iter().filter(|item| item.scene_set_id == set_id).cloned().collect(); values.sort_by_key(|item| item.position); let from = values.iter().position(|item| item.id == scene_id).ok_or_else(|| "Unknown scene".to_string())?; let moved = values.remove(from); let target = position.max(0).min(values.len() as i64) as usize; values.insert(target, moved); for (index, value) in values.iter().enumerate() { if let Some(original) = state.store.scenes.iter_mut().find(|item| item.id == value.id) { original.position = index as i64; } } state.persist()?; Ok(values.into_iter().enumerate().map(|(index, mut value)| { value.position = index as i64; value }).collect()) }
+fn reorder_scene(scene_id: String, position: i64, app: State<'_, Mutex<AppState>>) -> Result<Vec<Scene>, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let values = reorder_scene_positions(&mut state.store.scenes, &scene_id, position)?; status(&mut state, "saved", "Scene order saved"); state.persist()?; Ok(values) }
 
 #[tauri::command]
 fn create_worldbuilding_item(input: WorldbuildingInput, app: State<'_, Mutex<AppState>>) -> Result<WorldbuildingItem, String> {
@@ -362,6 +611,10 @@ fn repair_note_link(link_id: String, target_id: String, app: State<'_, Mutex<App
 #[tauri::command]
 fn create_canvas(story_id: String, title: String, engine: Option<String>, app: State<'_, Mutex<AppState>>) -> Result<StoryCanvas, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; story(&state.store, &story_id)?; if title.trim().is_empty() { return Err("Canvas title is required".into()); } let engine = engine.unwrap_or_else(default_canvas_engine); if !valid_canvas_engine(&engine) { return Err(format!("Unsupported canvas engine: {engine}")); } let excalidraw_state = (engine == "excalidraw").then(|| serde_json::json!({ "elements": [], "appState": { "viewBackgroundColor": "#ffffff", "scrollX": 0, "scrollY": 0, "zoom": { "value": 1 } }, "files": {} })); let value = StoryCanvas { id: id("canvas"), story_id, title: title.trim().into(), viewport: CanvasViewport { x: 0.0, y: 0.0, zoom: 1.0 }, engine, excalidraw_state, revision: 1, created_at: timestamp(), updated_at: timestamp() }; state.store.canvases.push(value.clone()); status(&mut state, "saved", "Story canvas saved"); state.persist()?; Ok(value) }
 #[tauri::command]
+fn update_canvas(canvas_id: String, input: CanvasTitleInput, expected_revision: i64, app: State<'_, Mutex<AppState>>) -> Result<StoryCanvas, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let current = canvas(&state.store, &canvas_id)?.clone(); if current.revision != expected_revision { status(&mut state, "revision-conflict", "Save stopped: this canvas changed elsewhere"); state.persist()?; return Err(format!("Revision conflict: expected {expected_revision}, current {}", current.revision)); } if input.title.trim().is_empty() { return Err("Canvas title is required".into()); } let canvas_mut = state.store.canvases.iter_mut().find(|item| item.id == canvas_id).unwrap(); canvas_mut.title = input.title.trim().into(); canvas_mut.revision += 1; canvas_mut.updated_at = timestamp(); let value = canvas_mut.clone(); status(&mut state, "saved", "Canvas title saved"); state.persist()?; Ok(value) }
+#[tauri::command]
+fn delete_canvas(canvas_id: String, expected_revision: i64, app: State<'_, Mutex<AppState>>) -> Result<(), String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let current = canvas(&state.store, &canvas_id)?.clone(); if current.revision != expected_revision { status(&mut state, "revision-conflict", "Delete stopped: this canvas changed elsewhere"); state.persist()?; return Err(format!("Revision conflict: expected {expected_revision}, current {}", current.revision)); } let node_ids: std::collections::HashSet<String> = state.store.canvas_nodes.iter().filter(|node| node.canvas_id == canvas_id).map(|node| node.id.clone()).collect(); state.store.canvas_nodes.retain(|node| node.canvas_id != canvas_id); state.store.canvas_edges.retain(|edge| edge.canvas_id != canvas_id && !node_ids.contains(&edge.source_node_id) && !node_ids.contains(&edge.target_node_id)); state.store.canvases.retain(|item| item.id != canvas_id); status(&mut state, "saved", &format!("Canvas “{}” deleted; Markdown notes are unchanged", current.title)); state.persist()?; Ok(()) }
+#[tauri::command]
 fn list_canvases(story_id: Option<String>, app: State<'_, Mutex<AppState>>) -> Result<Vec<StoryCanvas>, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; Ok(state.store.canvases.iter().filter(|value| story_id.as_ref().map(|id| value.story_id == *id).unwrap_or(true)).cloned().map(|mut value| { if value.engine.is_empty() { value.engine = default_canvas_engine(); } value }).collect()) }
 #[tauri::command]
 fn canvas_projection(canvas_id: String, app: State<'_, Mutex<AppState>>) -> Result<CanvasProjection, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let mut value = canvas(&state.store, &canvas_id)?.clone(); if value.engine.is_empty() { value.engine = default_canvas_engine(); } let nodes: Result<Vec<CanvasProjectionNode>, String> = state.store.canvas_nodes.iter().filter(|node| node.canvas_id == canvas_id).map(|node| markdown_note(&state.store, &node.entity_id).map(|note| CanvasProjectionNode { id: node.id.clone(), canvas_id: node.canvas_id.clone(), entity_id: node.entity_id.clone(), position: node.position.clone(), entity_kind: "note".into(), label: note.title.clone() })).collect(); let nodes = nodes?; let edges: Vec<CanvasEdge> = state.store.note_links.iter().filter_map(|link| { let target = link.target_id.as_ref()?; let source_node = nodes.iter().find(|node| node.entity_id == link.note_id)?; let target_node = nodes.iter().find(|node| node.entity_id == *target)?; Some(CanvasEdge { id: format!("canvas-note-link-{canvas_id}-{}", link.id), canvas_id: canvas_id.clone(), source_node_id: source_node.id.clone(), target_node_id: target_node.id.clone(), note_link_id: link.id.clone() }) }).collect(); Ok(CanvasProjection { canvas: value, nodes, edges }) }
@@ -372,6 +625,7 @@ fn remove_canvas_node(canvas_id: String, node_id: String, expected_revision: i64
 #[tauri::command]
 fn save_excalidraw_scene(canvas_id: String, scene: serde_json::Value, expected_revision: i64, app: State<'_, Mutex<AppState>>) -> Result<StoryCanvas, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let current = canvas(&state.store, &canvas_id)?.clone(); if current.revision != expected_revision { return Err(format!("Revision conflict: expected {expected_revision}, current {}", current.revision)); } if current.engine != "excalidraw" { return Err("Excalidraw scene state can only be saved on an Excalidraw canvas".into()); } if !scene.get("elements").map(|value| value.is_array()).unwrap_or(false) || !scene.get("appState").map(|value| value.is_object()).unwrap_or(false) || !scene.get("files").map(|value| value.is_object()).unwrap_or(false) { return Err("Excalidraw scene state is invalid".into()); } let canvas_mut = state.store.canvases.iter_mut().find(|item| item.id == canvas_id).unwrap(); canvas_mut.excalidraw_state = Some(scene); canvas_mut.revision += 1; canvas_mut.updated_at = timestamp(); let value = canvas_mut.clone(); status(&mut state, "saved", "Excalidraw scene saved"); state.persist()?; Ok(value) }
 
+#[tauri::command]
 fn save_canvas_layout(canvas_id: String, positions: Vec<CanvasPositionUpdate>, viewport: CanvasViewport, expected_revision: i64, app: State<'_, Mutex<AppState>>) -> Result<StoryCanvas, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let current = canvas(&state.store, &canvas_id)?.clone(); if current.revision != expected_revision { return Err(format!("Revision conflict: expected {expected_revision}, current {}", current.revision)); } if !viewport.x.is_finite() || !viewport.y.is_finite() || !viewport.zoom.is_finite() || viewport.zoom <= 0.0 { return Err("Canvas viewport is invalid".into()); } for update in &positions { if !valid_position(&update.position) { return Err("Canvas position is invalid".into()); } let node = state.store.canvas_nodes.iter_mut().find(|node| node.canvas_id == canvas_id && node.id == update.id).ok_or_else(|| format!("Unknown canvas node {}", update.id))?; node.position = update.position.clone(); } let canvas_mut = state.store.canvases.iter_mut().find(|item| item.id == canvas_id).unwrap(); canvas_mut.viewport = viewport; canvas_mut.revision += 1; canvas_mut.updated_at = timestamp(); let value = canvas_mut.clone(); status(&mut state, "saved", "Canvas arrangement saved; Markdown note content is unchanged"); state.persist()?; Ok(value) }
 
 #[tauri::command]
@@ -395,24 +649,97 @@ fn compose_chapter(chapter_id: String, app: State<'_, Mutex<AppState>>) -> Resul
 #[tauri::command]
 fn get_style_profile(app: State<'_, Mutex<AppState>>) -> Result<EditorStyleProfile, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; Ok(state.store.style_profile.clone()) }
 #[tauri::command]
-fn update_style_profile(profile: EditorStyleProfile, app: State<'_, Mutex<AppState>>) -> Result<EditorStyleProfile, String> { if profile.font_family.trim().is_empty() { return Err("Font family is required".into()); } if !(8.0..=72.0).contains(&profile.font_size_pt) { return Err("Font size must be between 8 and 72 pt".into()); } if !["single", "1.15", "1.5", "double"].contains(&profile.line_spacing.as_str()) { return Err("Unsupported line spacing".into()); } if !["letter", "a4", "legal"].contains(&profile.page_size.as_str()) { return Err("Unsupported page size".into()); } let mut state = app.lock().map_err(|_| "Project lock poisoned")?; state.store.style_profile = profile.clone(); status(&mut state, "saved", "Writing style saved"); state.persist()?; Ok(profile) }
+fn update_style_profile(profile: EditorStyleProfile, app: State<'_, Mutex<AppState>>) -> Result<EditorStyleProfile, String> { if profile.font_family.trim().is_empty() { return Err("Font family is required".into()); } if !(8.0..=72.0).contains(&profile.font_size_pt) { return Err("Font size must be between 8 and 72 pt".into()); } if !["single", "1.15", "1.5", "double"].contains(&profile.line_spacing.as_str()) { return Err("Unsupported line spacing".into()); } if !["letter", "a4", "legal"].contains(&profile.page_size.as_str()) { return Err("Unsupported page size".into()); } for value in [profile.text_margins.top, profile.text_margins.right, profile.text_margins.bottom, profile.text_margins.left] { if !value.is_finite() || !(12.0..=240.0).contains(&value) { return Err("Text margins must be between 12 and 240 px".into()); } } let mut state = app.lock().map_err(|_| "Project lock poisoned")?; state.store.style_profile = profile.clone(); status(&mut state, "saved", "Writing style saved"); state.persist()?; Ok(profile) }
 #[tauri::command]
 fn writing_stats(app: State<'_, Mutex<AppState>>) -> Result<WritingStats, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; Ok(make_writing_stats(&state.store)) }
+#[tauri::command]
+fn writing_activity(days: Option<i64>, app: State<'_, Mutex<AppState>>) -> Result<Vec<WritingActivity>, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; Ok(make_writing_activity(&state.store, days.unwrap_or(365).max(1) as usize)) }
+#[tauri::command]
+fn save_manuscript_version(label: String, app: State<'_, Mutex<AppState>>) -> Result<ManuscriptVersionSummary, String> {
+    let mut state = app.lock().map_err(|_| "Project lock poisoned")?;
+    let project = state.store.project.clone().ok_or_else(|| "No project is open".to_string())?;
+    let clean_label = label.trim();
+    if clean_label.is_empty() { return Err("A version label is required".into()); }
+    if clean_label.chars().count() > 160 { return Err("A version label must be 160 characters or fewer".into()); }
+    let summary = ManuscriptVersionSummary { id: id("manuscript-version"), project_id: project.id, label: clean_label.into(), created_at: timestamp(), word_count: project_word_count(&state.store), scene_count: state.store.scenes.len() as i64, chapter_count: state.store.chapters.len() as i64 };
+    let documents = state.store.documents.iter().filter_map(|record| record.revisions.last().map(|revision| ManuscriptVersionDocument { document_id: record.id.clone(), revision: revision.clone() })).collect();
+    let snapshot = ManuscriptVersionSnapshot { stories: state.store.stories.clone(), chapters: state.store.chapters.clone(), scene_sets: state.store.scene_sets.clone(), scenes: state.store.scenes.clone(), continuous_drafts: state.store.drafts.clone(), documents };
+    state.store.manuscript_versions.push(StoredManuscriptVersion { summary: summary.clone(), snapshot });
+    status(&mut state, "saved", &format!("Manuscript version “{}” saved", summary.label));
+    state.persist()?;
+    Ok(summary)
+}
+#[tauri::command]
+fn list_manuscript_versions(app: State<'_, Mutex<AppState>>) -> Result<Vec<ManuscriptVersionSummary>, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; Ok(manuscript_version_summaries(&state.store)) }
+#[tauri::command]
+fn get_manuscript_version(version_id: String, app: State<'_, Mutex<AppState>>) -> Result<ManuscriptVersionDetail, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; manuscript_version_detail(&state.store, &version_id) }
+#[tauri::command]
+fn compare_manuscript_versions(from_version_id: String, to_version_id: String, app: State<'_, Mutex<AppState>>) -> Result<ManuscriptVersionComparison, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; compare_manuscript_version_values(&state.store, &from_version_id, &to_version_id) }
+#[tauri::command]
+fn restore_manuscript_version(version_id: String, app: State<'_, Mutex<AppState>>) -> Result<RestoreManuscriptVersionResult, String> {
+    let mut state = app.lock().map_err(|_| "Project lock poisoned")?;
+    let detail = manuscript_version_detail(&state.store, &version_id)?;
+    let before = state.store.clone();
+    let backup = capture_backup(&mut state)?;
+    match replace_manuscript_snapshot(&mut state.store, &detail.snapshot) {
+        Ok(()) => { status(&mut state, "recovered", &format!("Restored manuscript version “{}”; backup captured first", detail.summary.label)); match state.persist() { Ok(()) => Ok(RestoreManuscriptVersionResult { status: state.store.status.clone(), backup }), Err(error) => { state.store = before; state.store.backups.push(backup.clone()); let _ = state.persist(); Err(error) } } }
+        Err(error) => { state.store = before; state.store.backups.push(backup.clone()); status(&mut state, "failed", &error); let _ = state.persist(); Err(error) }
+    }
+}
 #[tauri::command]
 fn set_daily_word_target(target: i64, app: State<'_, Mutex<AppState>>) -> Result<WritingGoals, String> { if target < 0 { return Err("Daily word target must be zero or greater".into()); } let mut state = app.lock().map_err(|_| "Project lock poisoned")?; state.store.writing_goals.daily_target = target; status(&mut state, "saved", "Daily writing goal saved"); state.persist()?; Ok(state.store.writing_goals.clone()) }
 
 #[tauri::command]
-fn integrity_check(app: State<'_, Mutex<AppState>>) -> Result<IntegrityReport, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; status(&mut state, "integrity-check", "Checking project integrity…"); let db = state.db_path()?; let connection = Connection::open(db).map_err(|e| e.to_string())?; let value: String = connection.query_row("PRAGMA integrity_check", [], |row| row.get(0)).map_err(|e| e.to_string())?; let checked_at = timestamp(); let report = if value == "ok" { IntegrityReport { ok: true, message: "Integrity check passed".into(), checked_at } } else { IntegrityReport { ok: false, message: value, checked_at } }; status(&mut state, if report.ok { "saved" } else { "failed" }, &report.message); state.persist()?; Ok(report) }
+fn integrity_check(app: State<'_, Mutex<AppState>>) -> Result<IntegrityReport, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; status(&mut state, "integrity-check", "Checking project integrity…"); let db = state.db_path()?; let connection = Connection::open(db).map_err(|e| e.to_string())?; let value: String = connection.query_row("PRAGMA integrity_check", [], |row| row.get(0)).map_err(|e| e.to_string())?; let checked_at = timestamp(); let report = if value != "ok" { IntegrityReport { ok: false, message: format!("SQLite integrity check: {value}"), checked_at } } else if let Err(message) = validate_store(&state.store) { IntegrityReport { ok: false, message, checked_at } } else { IntegrityReport { ok: true, message: "Integrity check passed".into(), checked_at } }; status(&mut state, if report.ok { "saved" } else { "failed" }, &report.message); state.persist()?; Ok(report) }
 #[tauri::command]
-fn create_backup(app: State<'_, Mutex<AppState>>) -> Result<BackupRecord, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let db = state.db_path()?; let backup_id = id("backup"); let path = state.root.as_ref().unwrap().join(".weave").join("backups").join(format!("{backup_id}.db")); let created_at = timestamp(); let value = BackupRecord { id: backup_id.clone(), path: path.to_string_lossy().into_owned(), created_at: created_at.clone(), integrity: "ok".into() }; state.store.backups.push(value.clone()); status(&mut state, "backup", "Backup captured"); state.persist()?; let checkpoint = Connection::open(&db).map_err(|e| e.to_string())?; checkpoint.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").map_err(|e| e.to_string())?; fs::copy(&db, &path).map_err(|e| e.to_string())?; let connection = Connection::open(&db).map_err(|e| e.to_string())?; let json = serde_json::to_string(&state.store).map_err(|e| e.to_string())?; connection.execute("INSERT OR REPLACE INTO backups(id, path, created_at, integrity, state_json) VALUES (?1, ?2, ?3, ?4, ?5)", params![&backup_id, &value.path, &created_at, "ok", &json]).map_err(|e| e.to_string())?; Ok(value) }
+fn capture_backup(state: &mut AppState) -> Result<BackupRecord, String> { let db = state.db_path()?; let backup_id = id("backup"); let path = state.root.as_ref().ok_or_else(|| "No project is open".to_string())?.join(".weave").join("backups").join(format!("{backup_id}.db")); let created_at = timestamp(); let value = BackupRecord { id: backup_id.clone(), path: path.to_string_lossy().into_owned(), created_at: created_at.clone(), integrity: "ok".into() }; state.store.backups.push(value.clone()); status(state, "backup", "Backup captured"); state.persist()?; let checkpoint = Connection::open(&db).map_err(|e| e.to_string())?; checkpoint.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").map_err(|e| e.to_string())?; fs::copy(&db, &path).map_err(|e| e.to_string())?; let connection = Connection::open(&db).map_err(|e| e.to_string())?; let json = serde_json::to_string(&state.store).map_err(|e| e.to_string())?; connection.execute("INSERT OR REPLACE INTO backups(id, path, created_at, integrity, state_json) VALUES (?1, ?2, ?3, ?4, ?5)", params![&backup_id, &value.path, &created_at, "ok", &json]).map_err(|e| e.to_string())?; Ok(value) }
+#[tauri::command]
+fn create_backup(app: State<'_, Mutex<AppState>>) -> Result<BackupRecord, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; capture_backup(&mut state) }
 #[tauri::command]
 fn recover_from_backup(backup_id: String, app: State<'_, Mutex<AppState>>) -> Result<OperationStatus, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let connection = Connection::open(state.db_path()?).map_err(|e| e.to_string())?; let json: String = connection.query_row("SELECT state_json FROM backups WHERE id=?1", params![backup_id], |row| row.get(0)).map_err(|e| e.to_string())?; state.store = serde_json::from_str(&json).map_err(|e| e.to_string())?; let note_ids: std::collections::HashSet<String> = state.store.markdown_notes.iter().map(|note| note.id.clone()).collect(); state.store.worldbuilding_items.clear(); state.store.relationships.clear(); state.store.document_links.clear(); state.store.canvas_nodes.retain(|node| note_ids.contains(&node.entity_id)); state.store.canvas_edges.clear(); if let Some(project) = state.store.project.as_mut() { project.schema_version = project.schema_version.max(5); } for canvas in &mut state.store.canvases { if canvas.engine.is_empty() { canvas.engine = default_canvas_engine(); } } status(&mut state, "recovered", "Recovered backup; verify the project before editing"); state.persist()?; Ok(state.store.status.clone()) }
 #[tauri::command]
 fn get_status(app: State<'_, Mutex<AppState>>) -> Result<OperationStatus, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; Ok(state.store.status.clone()) }
 #[tauri::command]
-fn project_snapshot(app: State<'_, Mutex<AppState>>) -> Result<ProjectSnapshot, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let project = state.store.project.clone().ok_or_else(|| "No project is open".to_string())?; Ok(ProjectSnapshot { project, stories: state.store.stories.clone(), chapters: state.store.chapters.clone(), scene_sets: state.store.scene_sets.clone(), scenes: state.store.scenes.clone(), continuous_drafts: state.store.drafts.clone(), markdown_notes: state.store.markdown_notes.clone(), note_links: state.store.note_links.clone(), canvases: state.store.canvases.clone(), style_profile: state.store.style_profile.clone(), writing_stats: make_writing_stats(&state.store), status: state.store.status.clone() }) }
+fn project_snapshot(app: State<'_, Mutex<AppState>>) -> Result<ProjectSnapshot, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let project = state.store.project.clone().ok_or_else(|| "No project is open".to_string())?; Ok(ProjectSnapshot { project, stories: state.store.stories.clone(), chapters: state.store.chapters.clone(), scene_sets: state.store.scene_sets.clone(), scenes: state.store.scenes.clone(), continuous_drafts: state.store.drafts.clone(), markdown_notes: state.store.markdown_notes.clone(), note_links: state.store.note_links.clone(), canvases: state.store.canvases.clone(), backups: state.store.backups.clone(), style_profile: state.store.style_profile.clone(), writing_stats: make_writing_stats(&state.store), writing_activity: make_writing_activity(&state.store, 365), manuscript_versions: manuscript_version_summaries(&state.store), status: state.store.status.clone() }) }
 #[tauri::command]
 fn write_export(filename: String, bytes: Vec<u8>, app: State<'_, Mutex<AppState>>) -> Result<String, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let root = state.root.as_ref().ok_or_else(|| "No project is open".to_string())?; let exports = root.join(".weave").join("exports"); fs::create_dir_all(&exports).map_err(|e| e.to_string())?; let safe = Path::new(&filename).file_name().ok_or_else(|| "Invalid export filename".to_string())?; let path = exports.join(safe); fs::write(&path, bytes).map_err(|e| e.to_string())?; Ok(path.to_string_lossy().into_owned()) }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() { tauri::Builder::default().manage(Mutex::new(AppState::default())).invoke_handler(tauri::generate_handler![create_project, open_project, get_project, create_story, create_chapter, create_scene, list_stories, list_chapters, list_scene_sets, list_scenes, rename_scene, reorder_scene, create_markdown_note, update_markdown_note, delete_markdown_note, list_markdown_notes, search_markdown_notes, list_note_links, repair_note_link, create_canvas, list_canvases, canvas_projection, save_excalidraw_scene, add_canvas_node, remove_canvas_node, save_canvas_layout, get_document, get_revision, save_document, get_style_profile, update_style_profile, writing_stats, set_daily_word_target, enter_continuous_draft, get_continuous_draft, keep_continuous_separate, automatically_split_continuous, compose_chapter, integrity_check, create_backup, recover_from_backup, get_status, project_snapshot, write_export]).run(tauri::generate_context!()).expect("error while running Weave"); }
+pub fn run() { tauri::Builder::default().manage(Mutex::new(AppState::default())).invoke_handler(tauri::generate_handler![create_project, open_project, get_project, create_story, create_chapter, create_scene, rename_story, rename_chapter, delete_story, delete_chapter, delete_scene, list_stories, list_chapters, list_scene_sets, list_scenes, rename_scene, reorder_scene, create_markdown_note, update_markdown_note, delete_markdown_note, list_markdown_notes, search_markdown_notes, list_note_links, repair_note_link, create_canvas, update_canvas, delete_canvas, list_canvases, canvas_projection, save_excalidraw_scene, add_canvas_node, remove_canvas_node, save_canvas_layout, get_document, get_revision, get_style_profile, update_style_profile, writing_stats, writing_activity, save_manuscript_version, list_manuscript_versions, get_manuscript_version, compare_manuscript_versions, restore_manuscript_version, set_daily_word_target, enter_continuous_draft, get_continuous_draft, keep_continuous_separate, automatically_split_continuous, compose_chapter, integrity_check, create_backup, recover_from_backup, get_status, project_snapshot, write_export]).run(tauri::generate_context!()).expect("error while running Weave"); }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scene(id: &str, position: i64) -> Scene {
+        Scene { id: id.into(), scene_set_id: "set".into(), title: id.into(), position, document_id: format!("document-{id}") }
+    }
+
+    #[test]
+    fn reindex_scene_positions_uses_existing_ordered_positions() {
+        let mut scenes = vec![scene("third", 1), scene("first", 2), scene("second", 0)];
+        reindex_scene_positions(&mut scenes, "set");
+        assert_eq!(scenes.iter().find(|scene| scene.id == "second").unwrap().position, 0);
+        assert_eq!(scenes.iter().find(|scene| scene.id == "third").unwrap().position, 1);
+        assert_eq!(scenes.iter().find(|scene| scene.id == "first").unwrap().position, 2);
+    }
+
+    #[test]
+    fn duplicate_restore_ids_are_rejected() {
+        let result = ensure_unique_ids(vec!["story-1".to_string(), "story-1".to_string()].into_iter(), "story");
+        assert_eq!(result.unwrap_err(), "Duplicate story story-1");
+    }
+
+    #[test]
+    fn reorder_scene_positions_persists_order_for_both_directions_and_clamps() {
+        let mut scenes = vec![scene("first", 0), scene("second", 1), scene("third", 2), scene("other-set", 0)];
+        scenes[3].scene_set_id = "other".into();
+        let ordered = reorder_scene_positions(&mut scenes, "third", 1).unwrap();
+        assert_eq!(ordered.iter().map(|scene| scene.id.as_str()).collect::<Vec<_>>(), vec!["first", "third", "second"]);
+        assert_eq!(scenes.iter().filter(|scene| scene.scene_set_id == "set").map(|scene| scene.position).collect::<Vec<_>>(), vec![0, 2, 1]);
+        let ordered = reorder_scene_positions(&mut scenes, "first", 99).unwrap();
+        assert_eq!(ordered.iter().map(|scene| scene.id.as_str()).collect::<Vec<_>>(), vec!["third", "second", "first"]);
+        assert_eq!(scenes.iter().filter(|scene| scene.scene_set_id == "set").map(|scene| scene.position).collect::<Vec<_>>(), vec![2, 1, 0]);
+        assert_eq!(scenes.iter().find(|scene| scene.id == "other-set").unwrap().position, 0);
+    }
+}

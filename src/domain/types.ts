@@ -8,6 +8,16 @@ export type Alignment = 'left' | 'center' | 'right';
 export type LineSpacing = 'single' | '1.15' | '1.5' | 'double';
 export type PageSize = 'letter' | 'a4' | 'legal';
 
+export interface TextMargins {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+/** Defaults preserve the original writing-paper proportions. */
+export const DEFAULT_TEXT_MARGINS: TextMargins = Object.freeze({ top: 44, right: 72, bottom: 30, left: 72 });
+
 export interface EditorStyleProfile {
   /** Presentation only; never embedded in StructuredDocument. */
   fontFamily: string;
@@ -15,6 +25,8 @@ export interface EditorStyleProfile {
   lineSpacing: LineSpacing;
   /** Physical page format for the writing canvas and visual exports. */
   pageSize?: PageSize;
+  /** Global writing margins. Applied to manuscript and Markdown note pages only. */
+  textMargins?: TextMargins;
 }
 
 export const DEFAULT_EDITOR_STYLE: EditorStyleProfile = Object.freeze({
@@ -222,6 +234,65 @@ export interface WritingStats {
   projectWords: number;
 }
 
+export interface WritingActivity {
+  date: string;
+  words: number;
+}
+
+export interface ManuscriptVersionSummary {
+  id: string;
+  projectId: string;
+  label: string;
+  createdAt: string;
+  wordCount: number;
+  sceneCount: number;
+  chapterCount: number;
+}
+
+export interface ManuscriptVersionDocument {
+  documentId: string;
+  revision: Revision;
+}
+
+export interface ManuscriptVersionSnapshot {
+  stories: Story[];
+  chapters: Chapter[];
+  sceneSets: SceneSet[];
+  scenes: Scene[];
+  continuousDrafts: ContinuousDraft[];
+  documents: ManuscriptVersionDocument[];
+}
+
+export interface ManuscriptVersionDetail {
+  summary: ManuscriptVersionSummary;
+  snapshot: ManuscriptVersionSnapshot;
+}
+
+export type ManuscriptVersionChangeKind = 'story' | 'chapter' | 'scene-set' | 'scene' | 'continuous-draft' | 'document';
+export type ManuscriptVersionChangeType = 'added' | 'removed' | 'changed';
+
+export interface ManuscriptVersionChange {
+  kind: ManuscriptVersionChangeKind;
+  change: ManuscriptVersionChangeType;
+  id: string;
+  label?: string;
+  beforeLabel?: string;
+  afterLabel?: string;
+  beforeDocument?: StructuredDocument;
+  afterDocument?: StructuredDocument;
+}
+
+export interface ManuscriptVersionComparison {
+  from: ManuscriptVersionSummary;
+  to: ManuscriptVersionSummary;
+  changes: ManuscriptVersionChange[];
+}
+
+export interface RestoreManuscriptVersionResult {
+  status: OperationStatus;
+  backup: BackupRecord;
+}
+
 export interface IntegrityReport {
   ok: boolean;
   message: string;
@@ -238,8 +309,11 @@ export interface ProjectSnapshot {
   markdownNotes: MarkdownNote[];
   noteLinks: NoteLink[];
   canvases: StoryCanvas[];
+  backups: BackupRecord[];
   styleProfile: EditorStyleProfile;
   writingStats: WritingStats;
+  writingActivity: WritingActivity[];
+  manuscriptVersions: ManuscriptVersionSummary[];
   status: OperationStatus;
 }
 

@@ -32,23 +32,23 @@ describe('Markdown note sidebar actions', () => {
   });
 
   it('defines labeled confirmation states and preserves reference warnings', () => {
-    expect(appSource).toContain('role="dialog" aria-modal="true" aria-busy={busy}');
-    expect(appSource).toContain('aria-labelledby="delete-note-dialog-title"');
-    expect(appSource).toContain('aria-describedby="delete-note-dialog-description"');
+    expect(appSource).toContain('function NoteDeleteDialog');
+    expect(appSource).toContain('closeDisabled={busy}');
+    expect(appSource).toContain('aria-modal="true"');
     expect(appSource).toContain('Are you sure you want to delete');
     expect(appSource).toContain('Delete note');
     expect(appSource).toContain('Delete and remove references');
     expect(appSource).toContain('mode === \'reject\' && message.startsWith(\'Cannot delete\')');
     expect(appSource).toContain('phase: \'references\'');
     expect(appSource).toContain("'remove-references'");
-    expect(appSource).toContain("event.key === 'Escape'");
+    expect(appSource).toContain('canDismissWithEscape');
     expect(appSource).toContain('>Cancel</button>');
     expect(appSource).toContain('className="danger-button"');
   });
 
   it('defines an accessible note-name modal and keeps creation behind explicit confirmation', () => {
     expect(appSource).toContain('function NoteCreateDialog');
-    expect(appSource).toContain('<Modal eyebrow="NOTE" title="Create note" onClose={busy ? undefined : onCancel}>');
+    expect(appSource).toContain('<Modal eyebrow="NOTE" title="Create note" onClose={onCancel} closeDisabled={busy} busy={busy} trigger={trigger}>');
     expect(appSource).toContain('id="create-note-name"');
     expect(appSource).toContain('autoFocus required aria-label="Note name"');
     expect(appSource).toContain('>Cancel</button>');
@@ -63,13 +63,13 @@ describe('Markdown note sidebar actions', () => {
     expect(createStart).toBeGreaterThanOrEqual(0);
     expect(submitStart).toBeGreaterThan(createStart);
     expect(canvasStart).toBeGreaterThan(submitStart);
-    expect(appSource.slice(createStart, submitStart)).toContain('await autosave.flush(); setNoteCreateDialog(true);');
+    expect(appSource.slice(createStart, submitStart)).toContain('await autosave.flush(); setNoteCreateDialog({ trigger });');
     expect(appSource.slice(createStart, submitStart)).not.toContain('createMarkdownNote');
     const submitFlow = appSource.slice(submitStart, canvasStart);
     expect(submitFlow).toContain('const name = title.trim();');
     expect(submitFlow).toContain('if (!name) return;');
     expect(submitFlow).toContain('repository.createMarkdownNote(name)');
-    expect(submitFlow).toContain('setNoteCreateDialog(false);');
+    expect(submitFlow).toContain('setNoteCreateDialog(undefined);');
     expect(submitFlow).toContain('await refresh();');
     expect(submitFlow).toContain('openWorldbuildingTab({ kind: \'note\', id: note.id })');
   });

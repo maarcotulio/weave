@@ -1,0 +1,23 @@
+import { useEffect, useState } from 'react';
+import { DEFAULT_TEXT_MARGINS, type BackupRecord, type EditorStyleProfile, type IntegrityReport, type TextMargins, type WritingStats } from '../domain/types';
+
+function MarginFields({ margins, onChange }: { margins: TextMargins; onChange: (margins: TextMargins) => void }) {
+  return <div className="margin-fields">{(['top', 'right', 'bottom', 'left'] as const).map((side) => <label key={side}>{side} margin (px)<input type="number" min="12" max="240" step="1" value={margins[side]} onChange={(event) => onChange({ ...margins, [side]: Number(event.target.value) })} /></label>)}</div>;
+}
+
+export function SettingsPage({ styleProfile, stats, backups, integrityReport, lastBackup, busy, onSaveGoal, onSaveStyle, onCheckIntegrity, onCreateBackup, onRecoverBackup }: { styleProfile: EditorStyleProfile; stats: WritingStats; backups: BackupRecord[]; integrityReport?: IntegrityReport; lastBackup?: BackupRecord; busy: boolean; onSaveGoal: (target: number) => void; onSaveStyle: (profile: EditorStyleProfile) => void; onCheckIntegrity: () => void; onCreateBackup: () => void; onRecoverBackup: (backup: BackupRecord) => void }) {
+  const [target, setTarget] = useState(String(stats.dailyTarget));
+  const [margins, setMargins] = useState<TextMargins>({ ...DEFAULT_TEXT_MARGINS, ...(styleProfile.textMargins ?? {}) });
+  useEffect(() => setTarget(String(stats.dailyTarget)), [stats.dailyTarget]);
+  useEffect(() => setMargins({ ...DEFAULT_TEXT_MARGINS, ...(styleProfile.textMargins ?? {}) }), [styleProfile.textMargins]);
+  const saveGoal = () => onSaveGoal(Math.max(0, Math.trunc(Number(target) || 0)));
+  const saveMargins = () => onSaveStyle({ ...styleProfile, textMargins: margins });
+  return <main id="settings-workspace" className="settings-page" role="tabpanel" aria-label="Settings">
+    <header className="settings-header"><div><p className="eyebrow">PROJECT SETTINGS</p><h1>Make the workspace fit your process.</h1><p>These presentation preferences stay local to this project. Margins affect manuscript pages and Markdown notes, never canvas content.</p></div></header>
+    <div className="settings-grid">
+      <section className="settings-card" aria-labelledby="settings-goal-heading"><p className="eyebrow">WRITING GOAL</p><h2 id="settings-goal-heading">Daily word target</h2><p>Choose the number of manuscript words that marks a successful writing day.</p><div className="settings-form-row"><label htmlFor="settings-daily-target">Words per day<input id="settings-daily-target" type="number" min="0" step="1" value={target} onChange={(event) => setTarget(event.target.value)} /></label><button type="button" className="primary-button" disabled={busy} onClick={saveGoal}>Save goal</button></div></section>
+      <section className="settings-card settings-margins" aria-labelledby="settings-margins-heading"><p className="eyebrow">WRITING PAPER</p><h2 id="settings-margins-heading">Global text margins</h2><p>Applied consistently to Markdown note pages and manuscript writing pages.</p><MarginFields margins={margins} onChange={setMargins} /><button type="button" className="primary-button" disabled={busy} onClick={saveMargins}>Save margins</button></section>
+      <section className="settings-card settings-safety" aria-labelledby="settings-safety-heading"><p className="eyebrow">PROJECT SAFETY</p><h2 id="settings-safety-heading">Integrity and backups</h2><p>Verify the local project or capture a recoverable backup before a larger change.</p><div className="settings-button-row"><button type="button" className="secondary-button" disabled={busy} onClick={onCheckIntegrity}>Run integrity check</button><button type="button" className="secondary-button" disabled={busy} onClick={onCreateBackup}>Create backup</button></div>{integrityReport && <p className={`settings-result ${integrityReport.ok ? 'success' : 'failure'}`} role="status">{integrityReport.message}</p>}{lastBackup && <p className="settings-result success" role="status">Backup captured: {lastBackup.createdAt}</p>}<div className="backup-list"><h3>Available backups</h3>{backups.length === 0 ? <p>No backups yet.</p> : backups.slice().reverse().map((backup) => <div className="backup-row" key={backup.id}><span><strong>{new Date(backup.createdAt).toLocaleString()}</strong><small>{backup.path}</small></span><button type="button" className="text-button" disabled={busy} onClick={() => onRecoverBackup(backup)}>Recover</button></div>)}</div></section>
+    </div>
+  </main>;
+}

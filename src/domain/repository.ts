@@ -9,6 +9,7 @@ import {
 } from './document';
 import { composeChapter, splitByExplicitMarkers } from './scenes';
 import { calculateProjectWordCount, documentMapFromRecords, localCalendarDate } from './goals';
+import { cloneManuscriptVersionSnapshot, compareManuscriptVersionDetails, normalizeManuscriptVersionDetail, revisionRecord, validateManuscriptVersionSnapshot } from './manuscript-versions';
 import {
   DEFAULT_EDITOR_STYLE,
   type BackupRecord,
@@ -38,7 +39,14 @@ import {
   type CanvasEngine,
   type ExcalidrawSceneState,
   type WritingGoals,
-  type WritingStats
+  type WritingStats,
+  type WritingActivity,
+  type TextMargins,
+  type ManuscriptVersionSummary,
+  type ManuscriptVersionDetail,
+  type ManuscriptVersionComparison,
+  type RestoreManuscriptVersionResult,
+  type ManuscriptVersionSnapshot
 } from './types';
 
 /* Legacy records are retained only to safely read pre-v4 state. They are not exposed by the repository contract or snapshot and are discarded by persistent adapters. */
@@ -82,7 +90,12 @@ export interface ProjectRepository {
   listChapters(storyId?: string): Promise<Chapter[]>;
   listSceneSets(chapterId: string): Promise<SceneSet[]>;
   listScenes(chapterId: string, sceneSetId?: string): Promise<Scene[]>;
+  renameStory(storyId: string, title: string): Promise<Story>;
+  renameChapter(chapterId: string, title: string): Promise<Chapter>;
   renameScene(sceneId: string, title: string): Promise<Scene>;
+  deleteStory(storyId: string): Promise<void>;
+  deleteChapter(chapterId: string): Promise<void>;
+  deleteScene(sceneId: string): Promise<void>;
   reorderScene(sceneId: string, position: number): Promise<Scene[]>;
   createMarkdownNote(title: string, markdown?: string): Promise<MarkdownNote>;
   updateMarkdownNote(noteId: string, input: { title: string; markdown: string }, expectedRevision: number): Promise<MarkdownNote>;
@@ -92,6 +105,8 @@ export interface ProjectRepository {
   listNoteLinks(noteId?: string): Promise<NoteLink[]>;
   repairNoteLink(linkId: string, targetId: string): Promise<NoteLink>;
   createCanvas(storyId: string, title: string, engine?: CanvasEngine): Promise<StoryCanvas>;
+  updateCanvas(canvasId: string, input: { title: string }, expectedRevision: number): Promise<StoryCanvas>;
+  deleteCanvas(canvasId: string, expectedRevision: number): Promise<void>;
   listCanvases(storyId?: string): Promise<StoryCanvas[]>;
   getCanvasProjection(canvasId: string): Promise<CanvasProjection>;
   saveExcalidrawScene(canvasId: string, scene: ExcalidrawSceneState, expectedRevision: number): Promise<StoryCanvas>;
@@ -104,6 +119,12 @@ export interface ProjectRepository {
   getStyleProfile(): Promise<EditorStyleProfile>;
   updateStyleProfile(profile: EditorStyleProfile): Promise<EditorStyleProfile>;
   getWritingStats(): Promise<WritingStats>;
+  getWritingActivity(days?: number): Promise<WritingActivity[]>;
+  saveManuscriptVersion(label: string): Promise<ManuscriptVersionSummary>;
+  listManuscriptVersions(): Promise<ManuscriptVersionSummary[]>;
+  getManuscriptVersion(versionId: string): Promise<ManuscriptVersionDetail>;
+  compareManuscriptVersions(fromVersionId: string, toVersionId: string): Promise<ManuscriptVersionComparison>;
+  restoreManuscriptVersion(versionId: string): Promise<RestoreManuscriptVersionResult>;
   setDailyWordTarget(target: number): Promise<WritingGoals>;
   enterContinuousDraft(chapterId: string): Promise<ContinuousDraft>;
   getContinuousDraft(draftId: string): Promise<ContinuousDraft>;
@@ -143,6 +164,11 @@ function parseWikiLinks(markdown: string): ParsedWikiLink[] {
   return links;
 }
 
+interface StoredManuscriptVersion {
+  summary: ManuscriptVersionSummary;
+  snapshot: ManuscriptVersionSnapshot;
+}
+
 interface RepositoryState {
   project?: Project;
   stories: Story[];
@@ -163,6 +189,7 @@ interface RepositoryState {
   canvasEdges: CanvasEdge[];
   styleProfile: EditorStyleProfile;
   writingGoals: WritingGoals;
+  manuscriptVersions: StoredManuscriptVersion[];
   status: OperationStatus;
 }
 
@@ -196,12 +223,13 @@ export class InMemoryProjectRepository implements ProjectRepository {
     canvasEdges: [],
     styleProfile: { ...DEFAULT_EDITOR_STYLE },
     writingGoals: { dailyTarget: 500, dailyWordCounts: {} },
+    manuscriptVersions: [],
     status: initialStatus()
   };
   protected backupStates = new Map<string, RepositoryState>();
 
   async createProject(directory: string, name: string): Promise<Project> {
-    this.state = { stories: [], chapters: [], sceneSets: [], scenes: [], documents: [], drafts: [], backups: [], worldbuildingItems: [], relationships: [], documentLinks: [], markdownNotes: [], noteLinks: [], canvases: [], canvasNodes: [], canvasEdges: [], styleProfile: { ...DEFAULT_EDITOR_STYLE }, writingGoals: { dailyTarget: 500, dailyWordCounts: {} }, status: initialStatus() };
+    this.state = { stories: [], chapters: [], sceneSets: [], scenes: [], documents: [], drafts: [], backups: [], worldbuildingItems: [], relationships: [], documentLinks: [], markdownNotes: [], noteLinks: [], canvases: [], canvasNodes: [], canvasEdges: [], styleProfile: { ...DEFAULT_EDITOR_STYLE }, writingGoals: { dailyTarget: 500, dailyWordCounts: {} }, manuscriptVersions: [], status: initialStatus() };
     this.backupStates.clear();
     const project: Project = { id: newId('project'), name, directory, schemaVersion: 5, createdAt: now(), updatedAt: now() };
     this.state.project = project;
@@ -250,6 +278,24 @@ export class InMemoryProjectRepository implements ProjectRepository {
     return deepClone(scene);
   }
 
+  async renameStory(storyId: string, title: string): Promise<Story> {
+    const story = this.requireStory(storyId);
+    if (!title.trim()) throw new Error('A story title is required');
+    story.title = title.trim();
+    this.touchProject();
+    this.state.status = { state: 'saved', message: 'Story title saved', at: now() };
+    return deepClone(story);
+  }
+
+  async renameChapter(chapterId: string, title: string): Promise<Chapter> {
+    const chapter = this.requireChapter(chapterId);
+    if (!title.trim()) throw new Error('A chapter title is required');
+    chapter.title = title.trim();
+    this.touchProject();
+    this.state.status = { state: 'saved', message: 'Chapter title saved', at: now() };
+    return deepClone(chapter);
+  }
+
   async listStories(): Promise<Story[]> { return deepClone(this.state.stories.sort((a, b) => a.position - b.position)); }
 
   async listChapters(storyId?: string): Promise<Chapter[]> {
@@ -268,8 +314,77 @@ export class InMemoryProjectRepository implements ProjectRepository {
 
   async renameScene(sceneId: string, title: string): Promise<Scene> {
     const scene = this.requireScene(sceneId);
-    scene.title = title;
+    if (!title.trim()) throw new Error('A scene title is required');
+    scene.title = title.trim();
+    this.touchProject();
+    this.state.status = { state: 'saved', message: 'Scene title saved', at: now() };
     return deepClone(scene);
+  }
+
+  async deleteStory(storyId: string): Promise<void> {
+    const story = this.requireStory(storyId);
+    const chapterIds = new Set(this.state.chapters.filter((chapter) => chapter.storyId === storyId).map((chapter) => chapter.id));
+    const sceneSetIds = new Set(this.state.sceneSets.filter((set) => chapterIds.has(set.chapterId)).map((set) => set.id));
+    const sceneIds = new Set(this.state.scenes.filter((scene) => sceneSetIds.has(scene.sceneSetId)).map((scene) => scene.id));
+    const documentIds = new Set(this.state.scenes.filter((scene) => sceneIds.has(scene.id)).map((scene) => scene.documentId));
+    this.state.drafts = this.state.drafts.filter((draft) => {
+      if (!chapterIds.has(draft.chapterId)) return true;
+      documentIds.add(draft.documentId);
+      return false;
+    });
+    const canvasIds = new Set(this.state.canvases.filter((canvas) => canvas.storyId === storyId).map((canvas) => canvas.id));
+    this.state.relationships = this.state.relationships.filter((relationship) => !chapterIds.has(relationship.sourceId) && !chapterIds.has(relationship.targetId) && !sceneIds.has(relationship.sourceId) && !sceneIds.has(relationship.targetId));
+    this.state.documentLinks = this.state.documentLinks.filter((link) => !documentIds.has(link.anchor.documentId));
+    this.state.canvasEdges = this.state.canvasEdges.filter((edge) => !canvasIds.has(edge.canvasId));
+    this.state.canvasNodes = this.state.canvasNodes.filter((node) => !canvasIds.has(node.canvasId) && !chapterIds.has(node.entityId) && !sceneIds.has(node.entityId));
+    const remainingNodeIds = new Set(this.state.canvasNodes.map((node) => node.id));
+    this.state.canvasEdges = this.state.canvasEdges.filter((edge) => remainingNodeIds.has(edge.sourceNodeId) && remainingNodeIds.has(edge.targetNodeId));
+    this.state.canvases = this.state.canvases.filter((canvas) => !canvasIds.has(canvas.id));
+    this.state.documents = this.state.documents.filter((document) => !documentIds.has(document.id));
+    this.state.scenes = this.state.scenes.filter((scene) => !sceneIds.has(scene.id));
+    this.state.sceneSets = this.state.sceneSets.filter((set) => !sceneSetIds.has(set.id));
+    this.state.chapters = this.state.chapters.filter((chapter) => !chapterIds.has(chapter.id));
+    this.state.stories = this.state.stories.filter((candidate) => candidate.id !== storyId);
+    this.state.stories.forEach((candidate, position) => { candidate.position = position; });
+    this.touchProject();
+    this.state.status = { state: 'saved', message: `Story “${story.title}” and its manuscript content deleted`, at: now() };
+  }
+
+  async deleteChapter(chapterId: string): Promise<void> {
+    const chapter = this.requireChapter(chapterId);
+    const sceneSetIds = new Set(this.state.sceneSets.filter((set) => set.chapterId === chapterId).map((set) => set.id));
+    const sceneIds = new Set(this.state.scenes.filter((scene) => sceneSetIds.has(scene.sceneSetId)).map((scene) => scene.id));
+    const documentIds = new Set(this.state.scenes.filter((scene) => sceneIds.has(scene.id)).map((scene) => scene.documentId));
+    this.state.drafts = this.state.drafts.filter((draft) => {
+      if (draft.chapterId !== chapterId) return true;
+      documentIds.add(draft.documentId);
+      return false;
+    });
+    this.state.relationships = this.state.relationships.filter((relationship) => relationship.sourceId !== chapterId && relationship.targetId !== chapterId && !sceneIds.has(relationship.sourceId) && !sceneIds.has(relationship.targetId));
+    this.state.documentLinks = this.state.documentLinks.filter((link) => !documentIds.has(link.anchor.documentId));
+    this.state.canvasNodes = this.state.canvasNodes.filter((node) => node.entityId !== chapterId && !sceneIds.has(node.entityId));
+    this.state.canvasEdges = this.state.canvasEdges.filter((edge) => this.state.canvasNodes.some((node) => node.id === edge.sourceNodeId) && this.state.canvasNodes.some((node) => node.id === edge.targetNodeId));
+    this.state.documents = this.state.documents.filter((document) => !documentIds.has(document.id));
+    this.state.scenes = this.state.scenes.filter((scene) => !sceneIds.has(scene.id));
+    this.state.sceneSets = this.state.sceneSets.filter((set) => !sceneSetIds.has(set.id));
+    this.state.chapters = this.state.chapters.filter((candidate) => candidate.id !== chapterId);
+    this.state.chapters.filter((candidate) => candidate.storyId === chapter.storyId).forEach((candidate, position) => { candidate.position = position; });
+    this.touchProject();
+    this.state.status = { state: 'saved', message: `Chapter “${chapter.title}” and its scenes deleted`, at: now() };
+  }
+
+  async deleteScene(sceneId: string): Promise<void> {
+    const scene = this.requireScene(sceneId);
+    const documentId = scene.documentId;
+    this.state.relationships = this.state.relationships.filter((relationship) => relationship.sourceId !== sceneId && relationship.targetId !== sceneId);
+    this.state.documentLinks = this.state.documentLinks.filter((link) => link.anchor.documentId !== documentId);
+    this.state.canvasNodes = this.state.canvasNodes.filter((node) => node.entityId !== sceneId);
+    this.state.canvasEdges = this.state.canvasEdges.filter((edge) => this.state.canvasNodes.some((node) => node.id === edge.sourceNodeId) && this.state.canvasNodes.some((node) => node.id === edge.targetNodeId));
+    this.state.documents = this.state.documents.filter((document) => document.id !== documentId);
+    this.state.scenes = this.state.scenes.filter((candidate) => candidate.id !== sceneId);
+    this.state.scenes.filter((candidate) => candidate.sceneSetId === scene.sceneSetId).sort((left, right) => left.position - right.position).forEach((candidate, position) => { candidate.position = position; });
+    this.touchProject();
+    this.state.status = { state: 'saved', message: `Scene “${scene.title}” deleted`, at: now() };
   }
 
   async reorderScene(sceneId: string, position: number): Promise<Scene[]> {
@@ -281,6 +396,8 @@ export class InMemoryProjectRepository implements ProjectRepository {
     const [moved] = siblings.splice(from, 1);
     siblings.splice(bounded, 0, moved);
     siblings.forEach((item, index) => { item.position = index; });
+    this.touchProject();
+    this.state.status = { state: 'saved', message: 'Scene order saved', at: now() };
     return deepClone(siblings);
   }
 
@@ -497,6 +614,25 @@ export class InMemoryProjectRepository implements ProjectRepository {
     return deepClone(canvas);
   }
 
+  async updateCanvas(canvasId: string, input: { title: string }, expectedRevision: number): Promise<StoryCanvas> {
+    const canvas = this.requireCanvasRevision(canvasId, expectedRevision);
+    if (!input.title.trim()) throw new Error('Canvas title is required');
+    canvas.title = input.title.trim();
+    this.bumpCanvas(canvas);
+    this.state.status = { state: 'saved', message: 'Canvas title saved', at: now() };
+    return deepClone(canvas);
+  }
+
+  async deleteCanvas(canvasId: string, expectedRevision: number): Promise<void> {
+    const canvas = this.requireCanvasRevision(canvasId, expectedRevision);
+    const nodeIds = new Set(this.state.canvasNodes.filter((node) => node.canvasId === canvasId).map((node) => node.id));
+    this.state.canvasNodes = this.state.canvasNodes.filter((node) => node.canvasId !== canvasId);
+    this.state.canvasEdges = this.state.canvasEdges.filter((edge) => edge.canvasId !== canvasId && !nodeIds.has(edge.sourceNodeId) && !nodeIds.has(edge.targetNodeId));
+    this.state.canvases = this.state.canvases.filter((candidate) => candidate.id !== canvasId);
+    this.touchProject();
+    this.state.status = { state: 'saved', message: `Canvas “${canvas.title}” deleted; Markdown notes are unchanged`, at: now() };
+  }
+
   async listCanvases(storyId?: string): Promise<StoryCanvas[]> {
     return deepClone(this.state.canvases.filter((canvas) => !storyId || canvas.storyId === storyId).sort((left, right) => left.createdAt.localeCompare(right.createdAt)).map((canvas) => this.normalizeCanvas(canvas)));
   }
@@ -604,7 +740,8 @@ export class InMemoryProjectRepository implements ProjectRepository {
 
   async updateStyleProfile(profile: EditorStyleProfile): Promise<EditorStyleProfile> {
     this.validateStyleProfile(profile);
-    this.state.styleProfile = { ...DEFAULT_EDITOR_STYLE, ...deepClone(profile), pageSize: profile.pageSize ?? DEFAULT_EDITOR_STYLE.pageSize };
+    const savedMargins = profile.textMargins ?? this.state.styleProfile.textMargins;
+    this.state.styleProfile = { ...DEFAULT_EDITOR_STYLE, ...deepClone(profile), pageSize: profile.pageSize ?? DEFAULT_EDITOR_STYLE.pageSize, ...(savedMargins ? { textMargins: deepClone(savedMargins) } : {}) };
     this.touchProject();
     this.state.status = { state: 'saved', message: 'Writing style saved', at: now() };
     return deepClone(this.state.styleProfile);
@@ -618,6 +755,85 @@ export class InMemoryProjectRepository implements ProjectRepository {
       dailyWords: this.state.writingGoals?.dailyWordCounts?.[date] ?? 0,
       projectWords: this.currentProjectWordCount()
     };
+  }
+
+  async getWritingActivity(days = 365): Promise<WritingActivity[]> {
+    const limit = Math.max(1, Math.trunc(days));
+    return Object.entries(this.state.writingGoals?.dailyWordCounts ?? {})
+      .map(([date, words]) => ({ date, words: Math.max(0, words) }))
+      .sort((left, right) => left.date.localeCompare(right.date))
+      .slice(-limit)
+      .map((entry) => deepClone(entry));
+  }
+
+  async saveManuscriptVersion(label: string): Promise<ManuscriptVersionSummary> {
+    const project = await this.getProject();
+    const cleanLabel = label.trim();
+    if (!cleanLabel) throw new Error('A version label is required');
+    if (cleanLabel.length > 160) throw new Error('A version label must be 160 characters or fewer');
+    const summary: ManuscriptVersionSummary = {
+      id: newId('manuscript-version'),
+      projectId: project.id,
+      label: cleanLabel,
+      createdAt: now(),
+      wordCount: this.currentProjectWordCount(),
+      sceneCount: this.state.scenes.length,
+      chapterCount: this.state.chapters.length
+    };
+    const snapshot: ManuscriptVersionSnapshot = {
+      stories: deepClone(this.state.stories),
+      chapters: deepClone(this.state.chapters),
+      sceneSets: deepClone(this.state.sceneSets),
+      scenes: deepClone(this.state.scenes),
+      continuousDrafts: deepClone(this.state.drafts),
+      documents: this.state.documents.flatMap((record) => {
+        const revision = record.revisions.at(-1);
+        return revision ? [{ documentId: record.id, revision: deepClone(revision) }] : [];
+      })
+    };
+    this.state.manuscriptVersions.push({ summary, snapshot });
+    this.touchProject();
+    this.state.status = { state: 'saved', message: `Manuscript version “${cleanLabel}” saved`, at: now() };
+    return deepClone(summary);
+  }
+
+  async listManuscriptVersions(): Promise<ManuscriptVersionSummary[]> {
+    return deepClone(this.state.manuscriptVersions.slice().reverse().sort((left, right) => right.summary.createdAt.localeCompare(left.summary.createdAt)).map((version) => version.summary));
+  }
+
+  async getManuscriptVersion(versionId: string): Promise<ManuscriptVersionDetail> {
+    const stored = this.state.manuscriptVersions.find((version) => version.summary.id === versionId);
+    if (!stored) throw new Error(`Unknown manuscript version ${versionId}`);
+    return deepClone(normalizeManuscriptVersionDetail(stored));
+  }
+
+  async compareManuscriptVersions(fromVersionId: string, toVersionId: string): Promise<ManuscriptVersionComparison> {
+    const from = await this.getManuscriptVersion(fromVersionId);
+    const to = await this.getManuscriptVersion(toVersionId);
+    return deepClone(compareManuscriptVersionDetails(from, to));
+  }
+
+  async restoreManuscriptVersion(versionId: string): Promise<RestoreManuscriptVersionResult> {
+    const detail = await this.getManuscriptVersion(versionId);
+    const project = await this.getProject();
+    validateManuscriptVersionSnapshot(detail.snapshot, project.id);
+    const backup = await this.createBackup();
+    const before = deepClone(this.state);
+    try {
+      const snapshot = cloneManuscriptVersionSnapshot(detail.snapshot);
+      this.state.stories = snapshot.stories;
+      this.state.chapters = snapshot.chapters;
+      this.state.sceneSets = snapshot.sceneSets;
+      this.state.scenes = snapshot.scenes;
+      this.state.drafts = snapshot.continuousDrafts;
+      this.state.documents = snapshot.documents.map((entry) => revisionRecord(entry.revision));
+      this.touchProject();
+      this.state.status = { state: 'recovered', message: `Restored manuscript version “${detail.summary.label}”; backup captured first`, at: now() };
+      return { status: deepClone(this.state.status), backup: deepClone(backup) };
+    } catch (error) {
+      this.state = before;
+      throw error;
+    }
   }
 
   async setDailyWordTarget(target: number): Promise<WritingGoals> {
@@ -750,8 +966,10 @@ export class InMemoryProjectRepository implements ProjectRepository {
   async recoverFromBackup(backupId: string): Promise<OperationStatus> {
     const snapshot = this.backupStates.get(backupId);
     if (!snapshot) throw new Error(`Unknown backup ${backupId}`);
+    const availableBackups = deepClone(this.state.backups);
     this.state.status = { state: 'recovering', message: 'Recovering backup…', at: now() };
     this.state = deepClone(snapshot);
+    this.state.backups = availableBackups;
     this.state.status = { state: 'recovered', message: 'Recovered backup; verify the project before editing', at: now() };
     return this.state.status;
   }
@@ -775,8 +993,11 @@ export class InMemoryProjectRepository implements ProjectRepository {
       markdownNotes: deepClone(this.state.markdownNotes),
       noteLinks: deepClone(this.state.noteLinks),
       canvases: deepClone(this.state.canvases.map((canvas) => this.normalizeCanvas(canvas))),
+      backups: deepClone(this.state.backups),
       styleProfile: deepClone(this.state.styleProfile ?? DEFAULT_EDITOR_STYLE),
       writingStats: await this.getWritingStats(),
+      writingActivity: await this.getWritingActivity(),
+      manuscriptVersions: await this.listManuscriptVersions(),
       status: deepClone(this.state.status)
     };
   }
@@ -798,6 +1019,10 @@ export class InMemoryProjectRepository implements ProjectRepository {
     if (!Number.isFinite(profile.fontSizePt) || profile.fontSizePt < 8 || profile.fontSizePt > 72) throw new Error('Font size must be between 8 and 72 pt');
     if (!['single', '1.15', '1.5', 'double'].includes(profile.lineSpacing)) throw new Error('Unsupported line spacing');
     if (profile.pageSize !== undefined && !['letter', 'a4', 'legal'].includes(profile.pageSize)) throw new Error('Unsupported page size');
+    if (profile.textMargins) {
+      const values: Array<[keyof TextMargins, number]> = Object.entries(profile.textMargins) as Array<[keyof TextMargins, number]>;
+      for (const [side, value] of values) if (!Number.isFinite(value) || value < 12 || value > 240) throw new Error(`Text margin ${side} must be between 12 and 240 px`);
+    }
   }
 
   protected addDocument(document: StructuredDocument, reason: Revision['reason']): DocumentRecord {

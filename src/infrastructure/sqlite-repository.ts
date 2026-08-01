@@ -13,7 +13,7 @@ import { join } from 'node:path';
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as { DatabaseSync: new (path: string) => any };
 import { InMemoryProjectRepository } from '../domain/repository';
 import { now } from '../domain/document';
-import { DEFAULT_EDITOR_STYLE, type EditorStyleProfile, type WritingGoals } from '../domain/types';
+import { DEFAULT_EDITOR_STYLE, type EditorStyleProfile, type WritingGoals, type ManuscriptVersionSummary, type ManuscriptVersionDetail, type ManuscriptVersionComparison, type RestoreManuscriptVersionResult } from '../domain/types';
 import type { BackupRecord, OperationStatus, Project, StructuredDocument, MarkdownNote, NoteLink, StoryCanvas, CanvasPosition, CanvasViewport, CanvasNode, CanvasEdge, CanvasEngine, ExcalidrawSceneState } from '../domain/types';
 import type { SaveDocumentResult, SplitResult, DocumentHead } from '../domain/repository';
 import type { Chapter, ContinuousDraft, IntegrityReport, Revision, Scene, SceneSet, Story } from '../domain/types';
@@ -34,6 +34,7 @@ interface PersistedState {
   canvasEdges: CanvasEdge[];
   styleProfile: EditorStyleProfile;
   writingGoals: WritingGoals;
+  manuscriptVersions: unknown[];
   status: OperationStatus;
 }
 
@@ -73,13 +74,20 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
   async createStory(title: string): Promise<Story> { const value = await super.createStory(title); this.persist(); return value; }
   async createChapter(storyId: string, title: string): Promise<Chapter> { const value = await super.createChapter(storyId, title); this.persist(); return value; }
   async createScene(chapterId: string, title: string, document?: StructuredDocument): Promise<Scene> { const value = await super.createScene(chapterId, title, document); this.persist(); return value; }
+  async renameStory(storyId: string, title: string): Promise<Story> { const value = await super.renameStory(storyId, title); this.persist(); return value; }
+  async renameChapter(chapterId: string, title: string): Promise<Chapter> { const value = await super.renameChapter(chapterId, title); this.persist(); return value; }
   async renameScene(sceneId: string, title: string): Promise<Scene> { const value = await super.renameScene(sceneId, title); this.persist(); return value; }
+  async deleteStory(storyId: string): Promise<void> { await super.deleteStory(storyId); this.persist(); }
+  async deleteChapter(chapterId: string): Promise<void> { await super.deleteChapter(chapterId); this.persist(); }
+  async deleteScene(sceneId: string): Promise<void> { await super.deleteScene(sceneId); this.persist(); }
   async reorderScene(sceneId: string, position: number): Promise<Scene[]> { const value = await super.reorderScene(sceneId, position); this.persist(); return value; }
   async createMarkdownNote(title: string, markdown?: string): Promise<MarkdownNote> { const value = await super.createMarkdownNote(title, markdown); this.persist(); return value; }
   async updateMarkdownNote(noteId: string, input: { title: string; markdown: string }, expectedRevision: number): Promise<MarkdownNote> { try { const value = await super.updateMarkdownNote(noteId, input, expectedRevision); this.persist(); return value; } catch (error) { this.persist(); throw error; } }
   async deleteMarkdownNote(noteId: string, expectedRevision: number, mode?: 'reject' | 'remove-references'): Promise<void> { try { await super.deleteMarkdownNote(noteId, expectedRevision, mode); this.persist(); } catch (error) { this.persist(); throw error; } }
   async repairNoteLink(linkId: string, targetId: string): Promise<NoteLink> { const value = await super.repairNoteLink(linkId, targetId); this.persist(); return value; }
   async createCanvas(storyId: string, title: string, engine?: CanvasEngine): Promise<StoryCanvas> { const value = await super.createCanvas(storyId, title, engine); this.persist(); return value; }
+  async updateCanvas(canvasId: string, input: { title: string }, expectedRevision: number): Promise<StoryCanvas> { try { const value = await super.updateCanvas(canvasId, input, expectedRevision); this.persist(); return value; } catch (error) { this.persist(); throw error; } }
+  async deleteCanvas(canvasId: string, expectedRevision: number): Promise<void> { try { await super.deleteCanvas(canvasId, expectedRevision); this.persist(); } catch (error) { this.persist(); throw error; } }
   async saveExcalidrawScene(canvasId: string, scene: ExcalidrawSceneState, expectedRevision: number): Promise<StoryCanvas> { try { const value = await super.saveExcalidrawScene(canvasId, scene, expectedRevision); this.persist(); return value; } catch (error) { this.persist(); throw error; } }
   async addCanvasNode(canvasId: string, entityId: string, position: CanvasPosition, expectedRevision: number): Promise<CanvasNode> { try { const value = await super.addCanvasNode(canvasId, entityId, position, expectedRevision); this.persist(); return value; } catch (error) { this.persist(); throw error; } }
   async removeCanvasNode(canvasId: string, nodeId: string, expectedRevision: number): Promise<void> { try { await super.removeCanvasNode(canvasId, nodeId, expectedRevision); this.persist(); } catch (error) { this.persist(); throw error; } }
@@ -95,6 +103,31 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
     const value = await super.setDailyWordTarget(target);
     this.persist();
     return value;
+  }
+
+  async saveManuscriptVersion(label: string): Promise<ManuscriptVersionSummary> {
+    const value = await super.saveManuscriptVersion(label);
+    this.persist();
+    return value;
+  }
+
+  async getManuscriptVersion(versionId: string): Promise<ManuscriptVersionDetail> { return super.getManuscriptVersion(versionId); }
+  async compareManuscriptVersions(fromVersionId: string, toVersionId: string): Promise<ManuscriptVersionComparison> { return super.compareManuscriptVersions(fromVersionId, toVersionId); }
+
+  async restoreManuscriptVersion(versionId: string): Promise<RestoreManuscriptVersionResult> {
+    const before = JSON.parse(JSON.stringify(this.state)) as typeof this.state;
+    const beforeBackupIds = new Set(before.backups.map((backup) => backup.id));
+    try {
+      const value = await super.restoreManuscriptVersion(versionId);
+      this.persist();
+      return value;
+    } catch (error) {
+      const newlyCreatedBackups = this.state.backups.filter((backup) => !beforeBackupIds.has(backup.id));
+      this.state = before;
+      this.state.backups.push(...newlyCreatedBackups);
+      try { this.persist(); } catch { /* preserve the original restore/persistence error */ }
+      throw error;
+    }
   }
 
   async saveDocument(documentId: string, document: StructuredDocument, expectedRevision: number): Promise<SaveDocumentResult> {
@@ -155,7 +188,8 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
       canvasNodes: restored.canvasNodes ?? [],
       canvasEdges: restored.canvasEdges ?? [],
       styleProfile: { ...DEFAULT_EDITOR_STYLE, ...(restored.styleProfile ?? {}) },
-      writingGoals: { dailyTarget: 500, dailyWordCounts: {}, ...(restored.writingGoals ?? {}) }
+      writingGoals: { dailyTarget: 500, dailyWordCounts: {}, ...(restored.writingGoals ?? {}) },
+      manuscriptVersions: restored.manuscriptVersions ?? []
     };
     const noteIds = new Set(this.state.markdownNotes.map((note) => note.id));
     this.state.canvasNodes = this.state.canvasNodes.filter((node) => noteIds.has(node.entityId));
@@ -233,7 +267,8 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
       canvasNodes: value.canvasNodes ?? [],
       canvasEdges: value.canvasEdges ?? [],
       styleProfile: { ...DEFAULT_EDITOR_STYLE, ...(value.styleProfile ?? {}) },
-      writingGoals: { dailyTarget: 500, dailyWordCounts: {}, ...(value.writingGoals ?? {}) }
+      writingGoals: { dailyTarget: 500, dailyWordCounts: {}, ...(value.writingGoals ?? {}) },
+      manuscriptVersions: value.manuscriptVersions ?? []
     };
     const noteIds = new Set(this.state.markdownNotes.map((note) => note.id));
     this.state.canvasNodes = this.state.canvasNodes.filter((node) => noteIds.has(node.entityId));
