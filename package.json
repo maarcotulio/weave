@@ -12,6 +12,7 @@
     "desktop:build": "tauri build"
   },
   "dependencies": {
+    "@excalidraw/excalidraw": "0.18.1",
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.0.0",
     "@xyflow/react": "12.11.2",

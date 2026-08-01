@@ -22,7 +22,9 @@ import type {
   CanvasPosition,
   CanvasViewport,
   CanvasNode,
-  CanvasProjection
+  CanvasProjection,
+  CanvasEngine,
+  ExcalidrawSceneState
 } from '../domain/types';
 
 /** The only renderer-to-desktop boundary. Components never call invoke directly. */
@@ -48,9 +50,10 @@ export class TauriProjectRepository implements ProjectRepository {
   searchMarkdownNotes(query: string): Promise<MarkdownNote[]> { return command('search_markdown_notes', { query }); }
   listNoteLinks(noteId?: string): Promise<NoteLink[]> { return command('list_note_links', { noteId }); }
   repairNoteLink(linkId: string, targetId: string): Promise<NoteLink> { return command('repair_note_link', { linkId, targetId }); }
-  createCanvas(storyId: string, title: string): Promise<StoryCanvas> { return command('create_canvas', { storyId, title }); }
+  createCanvas(storyId: string, title: string, engine?: CanvasEngine): Promise<StoryCanvas> { return command('create_canvas', { storyId, title, engine: engine ?? 'react-flow' }); }
   listCanvases(storyId?: string): Promise<StoryCanvas[]> { return command('list_canvases', { storyId }); }
   getCanvasProjection(canvasId: string): Promise<CanvasProjection> { return command('canvas_projection', { canvasId }); }
+  saveExcalidrawScene(canvasId: string, scene: ExcalidrawSceneState, expectedRevision: number): Promise<StoryCanvas> { return command('save_excalidraw_scene', { canvasId, scene, expectedRevision }); }
   addCanvasNode(canvasId: string, entityId: string, position: CanvasPosition, expectedRevision: number): Promise<CanvasNode> { return command('add_canvas_node', { canvasId, entityId, position, expectedRevision }); }
   removeCanvasNode(canvasId: string, nodeId: string, expectedRevision: number): Promise<void> { return command('remove_canvas_node', { canvasId, nodeId, expectedRevision }); }
   saveCanvasLayout(canvasId: string, positions: Array<{ id: string; position: CanvasPosition }>, viewport: CanvasViewport, expectedRevision: number): Promise<StoryCanvas> { return command('save_canvas_layout', { canvasId, positions, viewport, expectedRevision }); }

@@ -35,6 +35,8 @@ import {
   type CanvasNode,
   type CanvasEdge,
   type CanvasProjection,
+  type CanvasEngine,
+  type ExcalidrawSceneState,
   type WritingGoals,
   type WritingStats
 } from './types';
@@ -89,9 +91,10 @@ export interface ProjectRepository {
   searchMarkdownNotes(query: string): Promise<MarkdownNote[]>;
   listNoteLinks(noteId?: string): Promise<NoteLink[]>;
   repairNoteLink(linkId: string, targetId: string): Promise<NoteLink>;
-  createCanvas(storyId: string, title: string): Promise<StoryCanvas>;
+  createCanvas(storyId: string, title: string, engine?: CanvasEngine): Promise<StoryCanvas>;
   listCanvases(storyId?: string): Promise<StoryCanvas[]>;
   getCanvasProjection(canvasId: string): Promise<CanvasProjection>;
+  saveExcalidrawScene(canvasId: string, scene: ExcalidrawSceneState, expectedRevision: number): Promise<StoryCanvas>;
   addCanvasNode(canvasId: string, entityId: string, position: CanvasPosition, expectedRevision: number): Promise<CanvasNode>;
   removeCanvasNode(canvasId: string, nodeId: string, expectedRevision: number): Promise<void>;
   saveCanvasLayout(canvasId: string, positions: Array<{ id: string; position: CanvasPosition }>, viewport: CanvasViewport, expectedRevision: number): Promise<StoryCanvas>;
@@ -200,7 +203,7 @@ export class InMemoryProjectRepository implements ProjectRepository {
   async createProject(directory: string, name: string): Promise<Project> {
     this.state = { stories: [], chapters: [], sceneSets: [], scenes: [], documents: [], drafts: [], backups: [], worldbuildingItems: [], relationships: [], documentLinks: [], markdownNotes: [], noteLinks: [], canvases: [], canvasNodes: [], canvasEdges: [], styleProfile: { ...DEFAULT_EDITOR_STYLE }, writingGoals: { dailyTarget: 500, dailyWordCounts: {} }, status: initialStatus() };
     this.backupStates.clear();
-    const project: Project = { id: newId('project'), name, directory, schemaVersion: 3, createdAt: now(), updatedAt: now() };
+    const project: Project = { id: newId('project'), name, directory, schemaVersion: 5, createdAt: now(), updatedAt: now() };
     this.state.project = project;
     this.state.status = { state: 'saved', message: 'Project created', at: now() };
     return deepClone(project);
@@ -483,22 +486,23 @@ export class InMemoryProjectRepository implements ProjectRepository {
     return deepClone(link);
   }
 
-  async createCanvas(storyId: string, title: string): Promise<StoryCanvas> {
+  async createCanvas(storyId: string, title: string, engine: CanvasEngine = 'react-flow'): Promise<StoryCanvas> {
     this.requireStory(storyId);
     if (!title.trim()) throw new Error('Canvas title is required');
-    const canvas: StoryCanvas = { id: newId('canvas'), storyId, title: title.trim(), viewport: { x: 0, y: 0, zoom: 1 }, revision: 1, createdAt: now(), updatedAt: now() };
+    this.validateCanvasEngine(engine);
+    const canvas: StoryCanvas = { id: newId('canvas'), storyId, title: title.trim(), engine, viewport: { x: 0, y: 0, zoom: 1 }, revision: 1, createdAt: now(), updatedAt: now(), ...(engine === 'excalidraw' ? { excalidrawState: this.emptyExcalidrawState() } : {}) };
     this.state.canvases.push(canvas);
     this.touchProject();
-    this.state.status = { state: 'saved', message: 'Story canvas saved', at: now() };
+    this.state.status = { state: 'saved', message: `${engine === 'excalidraw' ? 'Excalidraw' : 'React Flow'} canvas saved`, at: now() };
     return deepClone(canvas);
   }
 
   async listCanvases(storyId?: string): Promise<StoryCanvas[]> {
-    return deepClone(this.state.canvases.filter((canvas) => !storyId || canvas.storyId === storyId).sort((left, right) => left.createdAt.localeCompare(right.createdAt)));
+    return deepClone(this.state.canvases.filter((canvas) => !storyId || canvas.storyId === storyId).sort((left, right) => left.createdAt.localeCompare(right.createdAt)).map((canvas) => this.normalizeCanvas(canvas)));
   }
 
   async getCanvasProjection(canvasId: string): Promise<CanvasProjection> {
-    const canvas = this.requireCanvas(canvasId);
+    const canvas = this.normalizeCanvas(this.requireCanvas(canvasId));
     const nodes = this.state.canvasNodes.filter((node) => node.canvasId === canvasId).map((node) => {
       const note = this.requireMarkdownNote(node.entityId);
       return { ...deepClone(node), entityKind: 'note' as const, label: note.title };
@@ -510,6 +514,16 @@ export class InMemoryProjectRepository implements ProjectRepository {
       return source && target ? [{ id: `canvas-note-link-${canvasId}-${link.id}`, canvasId, sourceNodeId: source.id, targetNodeId: target.id, noteLinkId: link.id }] : [];
     });
     return { canvas: deepClone(canvas), nodes, edges };
+  }
+
+  async saveExcalidrawScene(canvasId: string, scene: ExcalidrawSceneState, expectedRevision: number): Promise<StoryCanvas> {
+    const canvas = this.requireCanvasRevision(canvasId, expectedRevision);
+    if ((canvas.engine ?? 'react-flow') !== 'excalidraw') throw new Error('Excalidraw scene state can only be saved on an Excalidraw canvas');
+    this.validateExcalidrawScene(scene);
+    canvas.excalidrawState = deepClone(scene);
+    this.bumpCanvas(canvas);
+    this.state.status = { state: 'saved', message: 'Excalidraw scene saved', at: now() };
+    return deepClone(canvas);
   }
 
   async addCanvasNode(canvasId: string, entityId: string, position: CanvasPosition, expectedRevision: number): Promise<CanvasNode> {
@@ -705,6 +719,8 @@ export class InMemoryProjectRepository implements ProjectRepository {
       }
       for (const canvas of this.state.canvases) {
         this.requireStory(canvas.storyId);
+        this.validateCanvasEngine(canvas.engine ?? 'react-flow');
+        if (canvas.engine === 'excalidraw' && canvas.excalidrawState) this.validateExcalidrawScene(canvas.excalidrawState);
         if (canvas.revision < 1) throw new Error(`Canvas ${canvas.id} has an invalid revision`);
       }
       for (const node of this.state.canvasNodes) { this.requireCanvas(node.canvasId); this.requireMarkdownNote(node.entityId); this.validatePosition(node.position); }
@@ -758,7 +774,7 @@ export class InMemoryProjectRepository implements ProjectRepository {
       continuousDrafts: deepClone(this.state.drafts),
       markdownNotes: deepClone(this.state.markdownNotes),
       noteLinks: deepClone(this.state.noteLinks),
-      canvases: deepClone(this.state.canvases),
+      canvases: deepClone(this.state.canvases.map((canvas) => this.normalizeCanvas(canvas))),
       styleProfile: deepClone(this.state.styleProfile ?? DEFAULT_EDITOR_STYLE),
       writingStats: await this.getWritingStats(),
       status: deepClone(this.state.status)
@@ -845,7 +861,24 @@ export class InMemoryProjectRepository implements ProjectRepository {
   protected requireCanvas(canvasId: string): StoryCanvas {
     const canvas = this.state.canvases.find((candidate) => candidate.id === canvasId);
     if (!canvas) throw new Error(`Unknown canvas ${canvasId}`);
+    return this.normalizeCanvas(canvas);
+  }
+
+  protected normalizeCanvas(canvas: StoryCanvas): StoryCanvas {
+    if (!canvas.engine) canvas.engine = 'react-flow';
     return canvas;
+  }
+
+  protected validateCanvasEngine(engine: CanvasEngine): void {
+    if (engine !== 'react-flow' && engine !== 'excalidraw') throw new Error(`Unsupported canvas engine: ${engine}`);
+  }
+
+  protected emptyExcalidrawState(): ExcalidrawSceneState {
+    return { elements: [], appState: { viewBackgroundColor: '#ffffff', scrollX: 0, scrollY: 0, zoom: { value: 1 } }, files: {} };
+  }
+
+  protected validateExcalidrawScene(scene: ExcalidrawSceneState): void {
+    if (!scene || !Array.isArray(scene.elements) || !scene.appState || typeof scene.appState !== 'object' || Array.isArray(scene.appState) || !scene.files || typeof scene.files !== 'object' || Array.isArray(scene.files)) throw new Error('Excalidraw scene state is invalid');
   }
 
   protected requireCanvasRevision(canvasId: string, expectedRevision: number): StoryCanvas {

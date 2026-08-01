@@ -1,11 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Background, Controls, MiniMap, ReactFlow, applyNodeChanges, type Edge, type Node, type NodeChange, type ReactFlowInstance } from '@xyflow/react';
+import { Excalidraw } from '@excalidraw/excalidraw';
 import '@xyflow/react/dist/style.css';
+import '@excalidraw/excalidraw/index.css';
+import { pageDimensions } from '../domain/pagination';
 import type { ProjectRepository } from '../domain/repository';
-import type { CanvasProjection, CanvasViewport, MarkdownNote, ProjectSnapshot, StoryCanvas } from '../domain/types';
+import type { CanvasEngine, CanvasProjection, CanvasViewport, ExcalidrawSceneState, MarkdownNote, ProjectSnapshot, StoryCanvas } from '../domain/types';
 
 export type WorldbuildingTab = { kind: 'note' | 'canvas'; id: string };
 export const worldbuildingTabKey = (tab: WorldbuildingTab) => `${tab.kind}:${tab.id}`;
+
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
 
 function TabStrip({ tabs, activeKey, snapshot, onActivate, onClose }: { tabs: WorldbuildingTab[]; activeKey?: string; snapshot: ProjectSnapshot; onActivate: (key: string) => void; onClose: (key: string) => void }) {
   const labelFor = (tab: WorldbuildingTab) => tab.kind === 'note' ? snapshot.markdownNotes.find((note) => note.id === tab.id)?.title ?? 'Deleted note' : snapshot.canvases.find((canvas) => canvas.id === tab.id)?.title ?? 'Deleted canvas';
@@ -17,22 +24,91 @@ function TabStrip({ tabs, activeKey, snapshot, onActivate, onClose }: { tabs: Wo
   </div>;
 }
 
+const NOTE_PAGE_CHARACTERS = 2100;
+const noteLineHeight: Record<string, number> = { single: 1, '1.15': 1.15, '1.5': 1.5, double: 2 };
+function splitNotePages(markdown: string): string[] {
+  if (!markdown) return [''];
+  const pages: string[] = [];
+  let offset = 0;
+  while (offset < markdown.length) {
+    const limit = Math.min(markdown.length, offset + NOTE_PAGE_CHARACTERS);
+    if (limit === markdown.length) { pages.push(markdown.slice(offset)); break; }
+    const lineBreak = markdown.lastIndexOf('\n', limit);
+    const end = lineBreak > offset ? lineBreak + 1 : limit;
+    pages.push(markdown.slice(offset, end));
+    offset = end;
+  }
+  return pages.length ? pages : [''];
+}
+
 function NoteEditor({ repository, note, snapshot, onRefresh, onOpen, onClose, onError }: { repository: ProjectRepository; note: MarkdownNote; snapshot: ProjectSnapshot; onRefresh: () => Promise<void>; onOpen: (id: string) => void; onClose: () => void; onError: (message: string) => void }) {
   const [title, setTitle] = useState(note.title);
   const [markdown, setMarkdown] = useState(note.markdown);
   const [linkTargetId, setLinkTargetId] = useState('');
   const [repairTargetId, setRepairTargetId] = useState('');
-  const editor = useRef<HTMLTextAreaElement>(null);
+  const [activePage, setActivePage] = useState(0);
+  const [dirty, setDirty] = useState(false);
+  const [savePaused, setSavePaused] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const editorRefs = useRef<Record<number, HTMLTextAreaElement | null>>({});
+  const editVersion = useRef(0);
+  const pages = useMemo(() => splitNotePages(markdown), [markdown]);
   const links = snapshot.noteLinks.filter((link) => link.noteId === note.id);
   const backlinks = snapshot.noteLinks.filter((link) => link.targetId === note.id);
-  useEffect(() => { setTitle(note.title); setMarkdown(note.markdown); }, [note.id, note.revision]);
-  const save = async () => { try { await repository.updateMarkdownNote(note.id, { title, markdown }, note.revision); await onRefresh(); } catch (error) { onError(error instanceof Error ? error.message : String(error)); } };
-  const insertLink = () => {
-    const target = snapshot.markdownNotes.find((candidate) => candidate.id === linkTargetId); if (!target) return;
-    const start = editor.current?.selectionStart ?? markdown.length; const end = editor.current?.selectionEnd ?? start; const token = `[[${target.title}]]`;
-    setMarkdown(`${markdown.slice(0, start)}${token}${markdown.slice(end)}`); setLinkTargetId('');
-    requestAnimationFrame(() => { editor.current?.focus(); editor.current?.setSelectionRange(start + token.length, start + token.length); });
+  const pageSize = snapshot.styleProfile.pageSize ?? 'letter';
+  const dimensions = pageDimensions(pageSize);
+
+  useEffect(() => {
+    setTitle(note.title);
+    setMarkdown(note.markdown);
+    setDirty(false);
+    setSavePaused(false);
+    setActivePage(0);
+  }, [note.id, note.revision]);
+
+  const save = useCallback(async (force = false) => {
+    if ((!dirty && !force) || saving) return;
+    const version = editVersion.current;
+    setSaving(true);
+    try {
+      await repository.updateMarkdownNote(note.id, { title, markdown }, note.revision);
+      if (version === editVersion.current) setDirty(false);
+      await onRefresh();
+    } catch (error) {
+      setSavePaused(true);
+      onError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSaving(false);
+    }
+  }, [dirty, markdown, note.id, note.revision, onError, onRefresh, repository, saving, title]);
+
+  useEffect(() => {
+    if (!dirty || savePaused) return;
+    const timer = window.setTimeout(() => { void save(); }, 700);
+    return () => window.clearTimeout(timer);
+  }, [dirty, save, savePaused]);
+
+  const editMarkdown = (value: string) => { editVersion.current += 1; setMarkdown(value); setDirty(true); setSavePaused(false); };
+  const updatePage = (pageIndex: number, value: string) => {
+    const start = pages.slice(0, pageIndex).reduce((total, page) => total + page.length, 0);
+    const next = `${markdown.slice(0, start)}${value}${markdown.slice(start + pages[pageIndex].length)}`;
+    editMarkdown(next);
   };
+  const insertLink = () => {
+    const target = snapshot.markdownNotes.find((candidate) => candidate.id === linkTargetId);
+    if (!target) return;
+    const pageIndex = Math.min(activePage, pages.length - 1);
+    const textarea = editorRefs.current[pageIndex];
+    const localStart = textarea?.selectionStart ?? pages[pageIndex].length;
+    const localEnd = textarea?.selectionEnd ?? localStart;
+    const start = pages.slice(0, pageIndex).reduce((total, page) => total + page.length, 0) + localStart;
+    const end = pages.slice(0, pageIndex).reduce((total, page) => total + page.length, 0) + localEnd;
+    const token = `[[${target.title}]]`;
+    editMarkdown(`${markdown.slice(0, start)}${token}${markdown.slice(end)}`);
+    setLinkTargetId('');
+    requestAnimationFrame(() => { const editor = editorRefs.current[pageIndex]; editor?.focus(); editor?.setSelectionRange(start + token.length, start + token.length); });
+  };
+
   const deleteNote = async () => {
     if (!window.confirm(`Remove ${note.title}?`)) return;
     try { await repository.deleteMarkdownNote(note.id, note.revision); onClose(); await onRefresh(); }
@@ -43,9 +119,11 @@ function NoteEditor({ repository, note, snapshot, onRefresh, onOpen, onClose, on
       } else onError(message);
     }
   };
+
   return <section className="note-tab-panel" id={`world-panel-note:${note.id}`} role="tabpanel" aria-labelledby={`world-tab-note:${note.id}`}>
-    <header className="note-editor-head"><div><p className="eyebrow">MARKDOWN NOTE</p><h1>{note.title}</h1><p>Only exact <code>[[Note title]]</code> and <code>[[Note title|label]]</code> create local note links.</p></div><div><button type="button" className="text-button" onClick={() => void deleteNote()}>Delete note</button><button type="button" className="primary-button" onClick={() => void save()} disabled={!title.trim()}>Save note</button></div></header>
-    <div className="note-editor-layout"><section className="note-writing"><label>Note title<input value={title} onChange={(event) => setTitle(event.target.value)} /></label><div className="note-link-picker"><label>Insert note link<select value={linkTargetId} onChange={(event) => setLinkTargetId(event.target.value)}><option value="">Choose note</option>{snapshot.markdownNotes.filter((candidate) => candidate.id !== note.id).map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.title}</option>)}</select></label><button type="button" className="secondary-button" disabled={!linkTargetId} onClick={insertLink}>Insert [[note]]</button></div><label>Markdown<textarea ref={editor} aria-label="Markdown note content" value={markdown} onChange={(event) => setMarkdown(event.target.value)} placeholder="# A local note\n\nLink another note with [[Title]] or [[Title|label]]." /></label></section>
+    <header className="note-editor-head"><div><p className="eyebrow">MARKDOWN NOTE · PAGE WRITING</p><h1>{title || 'Untitled note'}</h1><p>Write on persistent pages while Markdown remains the canonical source. Only exact <code>[[Note title]]</code> and <code>[[Note title|label]]</code> create local note links.</p></div><div><span className="note-save-state" role="status">{saving ? 'Saving…' : savePaused ? 'Save needs retry' : dirty ? 'Unsaved changes' : `Saved revision ${note.revision}`}</span><button type="button" className="text-button" onClick={() => void deleteNote()}>Delete note</button><button type="button" className="primary-button" onClick={() => { setSavePaused(false); void save(true); }} disabled={!title.trim() || saving}>Save note</button></div></header>
+    <div className="note-page-toolbar"><label>Note title<input value={title} onChange={(event) => { setTitle(event.target.value); editVersion.current += 1; setDirty(true); setSavePaused(false); }} /></label><div className="note-link-picker"><label>Insert note link<select value={linkTargetId} onChange={(event) => setLinkTargetId(event.target.value)}><option value="">Choose note</option>{snapshot.markdownNotes.filter((candidate) => candidate.id !== note.id).map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.title}</option>)}</select></label><button type="button" className="secondary-button" disabled={!linkTargetId} onClick={insertLink}>Insert [[note]]</button></div></div>
+    <div className="note-editor-layout"><section className="note-page-stack" aria-label="Markdown note pages" style={{ '--page-width': `${dimensions.widthPx}px`, '--page-height': `${dimensions.heightPx}px`, '--editor-font-family': snapshot.styleProfile.fontFamily, '--editor-font-size': `${snapshot.styleProfile.fontSizePt}pt`, '--editor-line-height': noteLineHeight[snapshot.styleProfile.lineSpacing] } as React.CSSProperties}>{pages.map((page, pageIndex) => <section className="note-paper-page" key={`${note.id}-page-${pageIndex}`}><div className="paper-meta"><span>MARKDOWN NOTE · CANONICAL TEXT</span><span>{dimensions.label} · Page {pageIndex + 1} of {pages.length}</span></div><textarea ref={(element) => { editorRefs.current[pageIndex] = element; }} className="note-page-input" aria-label={`Markdown note page ${pageIndex + 1}`} value={page} onFocus={() => setActivePage(pageIndex)} onChange={(event) => updatePage(pageIndex, event.target.value)} placeholder={pageIndex === 0 ? '# A local note\n\nLink another note with [[Title]] or [[Title|label]].' : undefined} /><div className="paper-footer"><span>Markdown source · autosaves locally</span><span>revision {note.revision}</span></div></section>)}</section>
       <aside className="note-link-index" aria-label="Note links and backlinks"><h2>Links</h2>{links.map((link) => link.targetId ? <p key={link.id}><button type="button" className="context-link" onClick={() => onOpen(link.targetId!)}>→ {snapshot.markdownNotes.find((candidate) => candidate.id === link.targetId)?.title ?? 'Missing note'}</button>{link.label && <> as “{link.label}”</>}</p> : <p key={link.id} className="unresolved-note-link"><strong>Unresolved:</strong> <code>[[{link.targetText}{link.label ? `|${link.label}` : ''}]]</code><select aria-label={`Repair ${link.targetText}`} value={repairTargetId} onChange={(event) => setRepairTargetId(event.target.value)}><option value="">Choose note</option>{snapshot.markdownNotes.filter((candidate) => candidate.id !== note.id).map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.title}</option>)}</select><button type="button" className="text-button" disabled={!repairTargetId} onClick={() => void repository.repairNoteLink(link.id, repairTargetId).then(async () => { setRepairTargetId(''); await onRefresh(); }).catch((error) => onError(error instanceof Error ? error.message : String(error)))}>Repair</button></p>)}{links.length === 0 && <p>No wiki links in this note.</p>}<h2>Backlinks</h2>{backlinks.map((link) => <p key={link.id}><button type="button" className="context-link" onClick={() => onOpen(link.noteId)}>{snapshot.markdownNotes.find((candidate) => candidate.id === link.noteId)?.title ?? 'Missing note'}</button></p>)}{backlinks.length === 0 && <p>No note backlinks.</p>}</aside>
     </div>
   </section>;
@@ -74,16 +152,51 @@ function NoteCanvas({ repository, canvas, snapshot, onRefresh, onError }: { repo
   const addNote = async () => { if (!projection || !noteToAdd) return; try { await repository.addCanvasNode(canvas.id, noteToAdd, { x: 80 + nodes.length * 32, y: 80 + nodes.length * 24 }, projection.canvas.revision); setNoteToAdd(''); await load(); await onRefresh(); } catch (error) { onError(error instanceof Error ? error.message : String(error)); } };
   const removeNodes = async (removed: Node[]) => { if (!projection || !removed.length) return; try { let revision = projection.canvas.revision; for (const node of removed) { await repository.removeCanvasNode(canvas.id, node.id, revision); revision += 1; } await load(); await onRefresh(); } catch (error) { onError(error instanceof Error ? error.message : String(error)); await load(); } };
   const labels = new Map(projection?.nodes.map((node) => [node.id, node.label]));
-  return <section className="canvas-tab-panel" id={`world-panel-canvas:${canvas.id}`} role="tabpanel" aria-labelledby={`world-tab-canvas:${canvas.id}`}><header className="note-editor-head"><div><p className="eyebrow">USER-CREATED NOTE CANVAS</p><h1>{canvas.title}</h1><p>Only Markdown note nodes appear here. Edges are resolved wiki links; dragging changes only saved layout and viewport.</p></div></header>
+  return <section className="canvas-tab-panel" id={`world-panel-canvas:${canvas.id}`} role="tabpanel" aria-labelledby={`world-tab-canvas:${canvas.id}`}><header className="note-editor-head"><div><p className="eyebrow">USER-CREATED NOTE CANVAS · REACT FLOW</p><h1>{canvas.title}</h1><p>React Flow projects Markdown note nodes and resolved wiki links. Layout and viewport are persisted separately from note content.</p></div></header>
     <div className="canvas-toolbar"><label>Add note<select value={noteToAdd} onChange={(event) => setNoteToAdd(event.target.value)}><option value="">Choose note</option>{snapshot.markdownNotes.filter((note) => !projection?.nodes.some((node) => node.entityId === note.id)).map((note) => <option key={note.id} value={note.id}>{note.title}</option>)}</select></label><button type="button" className="secondary-button" disabled={!noteToAdd} onClick={() => void addNote()}>Add note node</button></div>
     <div className="react-flow-shell" role="region" aria-label="Note canvas" tabIndex={0} onKeyDown={(event) => { if (event.key === 'Home') { event.preventDefault(); void instance.current?.fitView({ padding: 0.2 }); } }}><ReactFlow nodes={nodes} edges={edges} onNodesChange={(changes: NodeChange<Node>[]) => setNodes((current) => applyNodeChanges(changes, current))} onNodeDragStop={(_, node) => { const next = nodes.map((current) => current.id === node.id ? { ...current, position: node.position } : current); setNodes(next); void saveLayout(next); }} onNodesDelete={(removed) => void removeNodes(removed)} onMoveEnd={(_, next) => void saveLayout(nodes, { x: next.x, y: next.y, zoom: next.zoom })} onInit={(next) => { instance.current = next; }} defaultViewport={canvas.viewport} deleteKeyCode={['Backspace', 'Delete']} nodesFocusable edgesFocusable nodesConnectable={false} fitView><Background /><MiniMap pannable zoomable /><Controls showInteractive={false} /></ReactFlow></div>
     <section className="canvas-outline" aria-label="Note canvas outline fallback"><h2>Canvas outline</h2><p>Keyboard-accessible list of every note node and resolved wiki-link edge.</p><ul>{projection?.nodes.map((node) => <li key={node.id}><button type="button" onClick={() => { const flowNode = nodes.find((candidate) => candidate.id === node.id); if (flowNode) instance.current?.setCenter(flowNode.position.x, flowNode.position.y, { zoom: 1.2, duration: 150 }); }}>Note · {node.label}</button></li>)}</ul><h3>Wiki links</h3><ul>{projection?.edges.map((edge) => <li key={edge.id}>{labels.get(edge.sourceNodeId)} <span aria-hidden="true">→</span> {labels.get(edge.targetNodeId)}</li>)}{projection?.edges.length === 0 && <li>No resolved wiki links between placed notes.</li>}</ul></section>
   </section>;
 }
 
+function persistedAppState(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object') return {};
+  const source = value as Record<string, unknown>;
+  const keys = ['theme', 'viewBackgroundColor', 'scrollX', 'scrollY', 'zoom', 'gridSize', 'gridStep', 'zenModeEnabled', 'viewModeEnabled'];
+  return Object.fromEntries(keys.filter((key) => source[key] !== undefined).map((key) => [key, cloneJson(source[key])]));
+}
+
+function ExcalidrawCanvas({ repository, canvas, onRefresh, onError }: { repository: ProjectRepository; canvas: StoryCanvas; onRefresh: () => Promise<void>; onError: (message: string) => void }) {
+  const [projection, setProjection] = useState<CanvasProjection>();
+  const saveTimer = useRef<number>();
+  const hydrated = useRef(false);
+  const pendingRevision = useRef(0);
+  const load = useCallback(async () => {
+    hydrated.current = false;
+    const next = await repository.getCanvasProjection(canvas.id);
+    setProjection(next);
+    pendingRevision.current = next.canvas.revision;
+    requestAnimationFrame(() => { hydrated.current = true; });
+  }, [canvas.id, repository]);
+  useEffect(() => { void load().catch((error) => onError(error instanceof Error ? error.message : String(error))); return () => { if (saveTimer.current) window.clearTimeout(saveTimer.current); }; }, [load, onError]);
+
+  const persist = (elements: readonly unknown[], appState: unknown, files: unknown) => {
+    if (!hydrated.current || !projection) return;
+    const scene: ExcalidrawSceneState = { elements: cloneJson(Array.from(elements)), appState: persistedAppState(appState), files: cloneJson((files && typeof files === 'object' ? files : {}) as Record<string, unknown>) };
+    if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(() => { void repository.saveExcalidrawScene(canvas.id, scene, pendingRevision.current).then(async (saved) => { pendingRevision.current = saved.revision; await onRefresh(); }).catch((error) => onError(error instanceof Error ? error.message : String(error))); }, 700);
+  };
+
+  if (!projection) return <section className="canvas-tab-panel" aria-busy="true"><p className="canvas-loading">Loading Excalidraw…</p></section>;
+  const stored = projection.canvas.excalidrawState;
+  const initialData = { elements: stored?.elements ?? [], appState: stored?.appState ?? {}, files: stored?.files ?? {} };
+  return <section className="canvas-tab-panel excalidraw-tab-panel" id={`world-panel-canvas:${canvas.id}`} role="tabpanel" aria-labelledby={`world-tab-canvas:${canvas.id}`}><header className="note-editor-head"><div><p className="eyebrow">USER-CREATED NOTE CANVAS · EXCALIDRAW</p><h1>{canvas.title}</h1><p>Excalidraw scene elements, view state, and local image files are persisted in the project. This canvas is independent from the React Flow note projection.</p></div><span className="note-save-state" role="status">Local scene · revision {pendingRevision.current}</span></header><div className="excalidraw-shell" role="region" aria-label="Excalidraw canvas"><Excalidraw initialData={initialData as never} onChange={(elements, appState, files) => persist(elements, appState, files)} autoFocus={false} /></div><p className="canvas-accessibility-note">Use Tab to reach drawing controls and keyboard shortcuts; the canvas remains local-only and does not enable collaboration.</p></section>;
+}
+
 export function WorldbuildingWorkspace({ repository, snapshot, tabs, activeTabKey, onOpenTab, onActivateTab, onCloseTab, onCreateNote, onCreateCanvas, onRefresh, onReturnToManuscript, onError }: { repository: ProjectRepository; snapshot: ProjectSnapshot; tabs: WorldbuildingTab[]; activeTabKey?: string; onOpenTab: (tab: WorldbuildingTab) => void; onActivateTab: (key: string) => void; onCloseTab: (key: string) => void; onCreateNote: () => void; onCreateCanvas: () => void; onRefresh: () => Promise<void>; onReturnToManuscript: () => void; onError: (message: string) => void }) {
   const active = tabs.find((tab) => worldbuildingTabKey(tab) === activeTabKey) ?? tabs[0];
   const note = active?.kind === 'note' ? snapshot.markdownNotes.find((candidate) => candidate.id === active.id) : undefined;
   const canvas = active?.kind === 'canvas' ? snapshot.canvases.find((candidate) => candidate.id === active.id) : undefined;
-  return <main id="worldbuilding-workspace" role="tabpanel" aria-labelledby="worldbuilding-workspace-tab" className="worldbuilding-workspace"><section className="worldbuilding-main">{tabs.length > 0 && <TabStrip tabs={tabs} activeKey={worldbuildingTabKey(active ?? tabs[0])} snapshot={snapshot} onActivate={onActivateTab} onClose={onCloseTab} />}{note ? <NoteEditor repository={repository} note={note} snapshot={snapshot} onRefresh={onRefresh} onOpen={(id) => onOpenTab({ kind: 'note', id })} onClose={() => onCloseTab(worldbuildingTabKey({ kind: 'note', id: note.id }))} onError={onError} /> : canvas ? <NoteCanvas repository={repository} canvas={canvas} snapshot={snapshot} onRefresh={onRefresh} onError={onError} /> : <section className="worldbuilding-empty" aria-label="Worldbuilding empty state"><button type="button" onClick={onCreateNote}>Create new note</button><button type="button" onClick={onCreateCanvas}>Create new canva</button><button type="button" onClick={onReturnToManuscript}>Close</button></section>}</section></main>;
+  const engine: CanvasEngine = canvas?.engine ?? 'react-flow';
+  return <main id="worldbuilding-workspace" role="tabpanel" aria-labelledby="worldbuilding-workspace-tab" className="worldbuilding-workspace"><section className="worldbuilding-main">{tabs.length > 0 && <TabStrip tabs={tabs} activeKey={active ? worldbuildingTabKey(active) : undefined} snapshot={snapshot} onActivate={onActivateTab} onClose={onCloseTab} />}{note ? <NoteEditor repository={repository} note={note} snapshot={snapshot} onRefresh={onRefresh} onOpen={(id) => onOpenTab({ kind: 'note', id })} onClose={() => onCloseTab(worldbuildingTabKey({ kind: 'note', id: note.id }))} onError={onError} /> : canvas ? engine === 'excalidraw' ? <ExcalidrawCanvas repository={repository} canvas={canvas} onRefresh={onRefresh} onError={onError} /> : <NoteCanvas repository={repository} canvas={canvas} snapshot={snapshot} onRefresh={onRefresh} onError={onError} /> : <section className="worldbuilding-empty" aria-label="Worldbuilding empty state"><p className="eyebrow">LOCAL WORLDBUILDING</p><p>Create a Markdown page or choose a canvas engine.</p><button type="button" onClick={onCreateNote}>Create new note</button><button type="button" onClick={onCreateCanvas}>Create new canvas</button><button type="button" onClick={onReturnToManuscript}>Close</button></section>}</section></main>;
 }

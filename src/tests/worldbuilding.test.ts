@@ -55,6 +55,22 @@ describe('notes-only worldbuilding', () => {
     expect((await repository.listMarkdownNotes()).find((note) => note.id === source.id)?.markdown).toBe('[[Target]]');
   });
 
+  it('persists the selected canvas engine and Excalidraw scene state with revision checks', async () => {
+    const { repository, story } = await fixture();
+    const reactFlow = await repository.createCanvas(story.id, 'Legacy-compatible');
+    expect(reactFlow.engine).toBe('react-flow');
+    const excalidraw = await repository.createCanvas(story.id, 'Sketches', 'excalidraw');
+    expect(excalidraw.engine).toBe('excalidraw');
+    expect(excalidraw.excalidrawState?.elements).toEqual([]);
+    const saved = await repository.saveExcalidrawScene(excalidraw.id, { elements: [{ id: 'rectangle-1', type: 'rectangle' }], appState: { viewBackgroundColor: '#fefefe' }, files: {} }, excalidraw.revision);
+    expect(saved.revision).toBe(excalidraw.revision + 1);
+    const reopened = await repository.getCanvasProjection(excalidraw.id);
+    expect(reopened.canvas.engine).toBe('excalidraw');
+    expect(reopened.canvas.excalidrawState?.elements).toEqual([{ id: 'rectangle-1', type: 'rectangle' }]);
+    await expect(repository.saveExcalidrawScene(excalidraw.id, { elements: [], appState: {}, files: {} }, excalidraw.revision)).rejects.toThrow('changed');
+    await expect(repository.saveExcalidrawScene(reactFlow.id, { elements: [], appState: {}, files: {} }, reactFlow.revision)).rejects.toThrow('only be saved');
+  });
+
   it('accepts only notes as canvas nodes and keeps deletions reference-safe', async () => {
     const { repository, story } = await fixture();
     const source = await repository.createMarkdownNote('Source', '[[Target]]');
@@ -84,6 +100,8 @@ describe('offline persistence and accessible workspace', () => {
     const sourceSaved = await repository.updateMarkdownNote(source.id, { title: source.title, markdown: source.markdown }, source.revision);
     const canvas = await repository.createCanvas(story.id, 'Offline notes');
     await repository.addCanvasNode(canvas.id, sourceSaved.id, { x: 41, y: 42 }, canvas.revision);
+    const sketch = await repository.createCanvas(story.id, 'Offline sketch', 'excalidraw');
+    await repository.saveExcalidrawScene(sketch.id, { elements: [{ id: 'ellipse-1', type: 'ellipse' }], appState: { viewBackgroundColor: '#fff' }, files: {} }, sketch.revision);
     const placed = await repository.getCanvasProjection(canvas.id);
     await repository.addCanvasNode(canvas.id, target.id, { x: 99, y: 42 }, placed.canvas.revision);
     repository.close();
@@ -93,6 +111,9 @@ describe('offline persistence and accessible workspace', () => {
     const projection = await reopened.getCanvasProjection(canvas.id);
     expect(projection.nodes).toEqual(expect.arrayContaining([expect.objectContaining({ entityKind: 'note', position: { x: 41, y: 42 } })]));
     expect(projection.edges).toHaveLength(1);
+    const reopenedSketch = (await reopened.listCanvases(story.id)).find((candidate) => candidate.title === 'Offline sketch');
+    expect(reopenedSketch?.engine).toBe('excalidraw');
+    expect(reopenedSketch?.excalidrawState?.elements).toEqual([{ id: 'ellipse-1', type: 'ellipse' }]);
     expect((await reopened.integrityCheck()).ok).toBe(true);
     reopened.close();
   });
@@ -100,6 +121,10 @@ describe('offline persistence and accessible workspace', () => {
   it('ships accessible workspace tabs, exact empty actions, and a note-only React Flow fallback', () => {
     const component = readFileSync(join(process.cwd(), 'src/app/Worldbuilding.tsx'), 'utf8');
     expect(component).toContain("from '@xyflow/react'");
+    expect(component).toContain("from '@excalidraw/excalidraw'");
+    expect(component).toContain('note-page-stack');
+    expect(component).toContain('Markdown source · autosaves locally');
+    expect(component).toContain('saveExcalidrawScene');
     expect(component).toContain('role="tablist"');
     expect(component).toContain('role="tab"');
     expect(component).toContain('aria-label="Note canvas"');
@@ -108,19 +133,26 @@ describe('offline persistence and accessible workspace', () => {
     expect(component).toContain('Canvas outline');
     expect(component).toContain('Keyboard-accessible list of every note node and resolved wiki-link edge.');
     expect(component).toContain('[[Note title|label]]');
-    expect(component).toContain('Create new note</button><button type="button" onClick={onCreateCanvas}>Create new canva</button><button type="button" onClick={onReturnToManuscript}>Close');
+    expect(component).toContain('Create new note</button><button type="button" onClick={onCreateCanvas}>Create new canvas</button><button type="button" onClick={onReturnToManuscript}>Close');
     expect(component).not.toContain('worldbuilding-nav');
     expect(component).not.toContain('Create typed relationship');
     expect(component).not.toContain('Anchored, not parsed');
     const app = readFileSync(join(process.cwd(), 'src/app/App.tsx'), 'utf8');
     expect(app).toContain('Primary workspaces');
+    expect(app).toContain('CanvasChoiceDialog');
+    expect(app).toContain('type="radio"');
+    expect(app).toContain('Choose a canvas engine');
+    expect(app).toContain('Create canvas');
+    expect(app).toContain('Escape');
     expect(app).toContain('worldbuilding-sidebar-group');
     expect(app).toContain('worldbuildingTabs');
     expect(app).toContain("import { Plus } from 'lucide-react'");
     expect(app).toContain('worldbuilding-sidebar-heading');
     expect(app).toContain('className="worldbuilding-create-icon" aria-label="Create new note" title="Create new note" onClick={createWorldbuildingNote}><Plus');
-    expect(app).toContain('className="worldbuilding-create-icon" aria-label="Create new canva" title="Create new canva" onClick={createWorldbuildingCanvas}><Plus');
+    expect(app).toContain('className="worldbuilding-create-icon" aria-label="Create new canvas" title="Create new canvas" onClick={createWorldbuildingCanvas}><Plus');
     expect(readFileSync(join(process.cwd(), 'package.json'), 'utf8')).toContain('"lucide-react"');
+    expect(readFileSync(join(process.cwd(), 'package.json'), 'utf8')).toContain('"@excalidraw/excalidraw": "0.18.1"');
+    expect(readFileSync(join(process.cwd(), 'README.md'), 'utf8')).toContain('**0.18.1** package (MIT license');
     expect(app).toContain('onReturnToManuscript={() => setWorkspaceMode(\'writing\')}');
     const styles = readFileSync(join(process.cwd(), 'src/app/styles.css'), 'utf8');
     expect(styles).toContain('.worldbuilding-workspace { display: flex;');

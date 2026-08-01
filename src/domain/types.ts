@@ -114,11 +114,22 @@ export interface NoteLink {
 
 export interface CanvasViewport { x: number; y: number; zoom: number; }
 export interface CanvasPosition { x: number; y: number; }
+/** Canvas engines are presentation choices; React Flow remains the projection engine for legacy canvases. */
+export type CanvasEngine = 'react-flow' | 'excalidraw';
+/** JSON-safe Excalidraw state. Markdown notes and React Flow projection data stay separate. */
+export interface ExcalidrawSceneState {
+  elements: unknown[];
+  appState: Record<string, unknown>;
+  files: Record<string, unknown>;
+}
 export interface StoryCanvas {
   id: string;
   storyId: string;
   title: string;
   viewport: CanvasViewport;
+  /** Optional on the type for reading pre-choice records; new records always persist it. */
+  engine?: CanvasEngine;
+  excalidrawState?: ExcalidrawSceneState;
   revision: number;
   createdAt: string;
   updatedAt: string;

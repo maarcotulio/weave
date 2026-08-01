@@ -14,7 +14,7 @@ const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as { Data
 import { InMemoryProjectRepository } from '../domain/repository';
 import { now } from '../domain/document';
 import { DEFAULT_EDITOR_STYLE, type EditorStyleProfile, type WritingGoals } from '../domain/types';
-import type { BackupRecord, OperationStatus, Project, StructuredDocument, MarkdownNote, NoteLink, StoryCanvas, CanvasPosition, CanvasViewport, CanvasNode, CanvasEdge } from '../domain/types';
+import type { BackupRecord, OperationStatus, Project, StructuredDocument, MarkdownNote, NoteLink, StoryCanvas, CanvasPosition, CanvasViewport, CanvasNode, CanvasEdge, CanvasEngine, ExcalidrawSceneState } from '../domain/types';
 import type { SaveDocumentResult, SplitResult, DocumentHead } from '../domain/repository';
 import type { Chapter, ContinuousDraft, IntegrityReport, Revision, Scene, SceneSet, Story } from '../domain/types';
 
@@ -79,7 +79,8 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
   async updateMarkdownNote(noteId: string, input: { title: string; markdown: string }, expectedRevision: number): Promise<MarkdownNote> { try { const value = await super.updateMarkdownNote(noteId, input, expectedRevision); this.persist(); return value; } catch (error) { this.persist(); throw error; } }
   async deleteMarkdownNote(noteId: string, expectedRevision: number, mode?: 'reject' | 'remove-references'): Promise<void> { try { await super.deleteMarkdownNote(noteId, expectedRevision, mode); this.persist(); } catch (error) { this.persist(); throw error; } }
   async repairNoteLink(linkId: string, targetId: string): Promise<NoteLink> { const value = await super.repairNoteLink(linkId, targetId); this.persist(); return value; }
-  async createCanvas(storyId: string, title: string): Promise<StoryCanvas> { const value = await super.createCanvas(storyId, title); this.persist(); return value; }
+  async createCanvas(storyId: string, title: string, engine?: CanvasEngine): Promise<StoryCanvas> { const value = await super.createCanvas(storyId, title, engine); this.persist(); return value; }
+  async saveExcalidrawScene(canvasId: string, scene: ExcalidrawSceneState, expectedRevision: number): Promise<StoryCanvas> { try { const value = await super.saveExcalidrawScene(canvasId, scene, expectedRevision); this.persist(); return value; } catch (error) { this.persist(); throw error; } }
   async addCanvasNode(canvasId: string, entityId: string, position: CanvasPosition, expectedRevision: number): Promise<CanvasNode> { try { const value = await super.addCanvasNode(canvasId, entityId, position, expectedRevision); this.persist(); return value; } catch (error) { this.persist(); throw error; } }
   async removeCanvasNode(canvasId: string, nodeId: string, expectedRevision: number): Promise<void> { try { await super.removeCanvasNode(canvasId, nodeId, expectedRevision); this.persist(); } catch (error) { this.persist(); throw error; } }
   async saveCanvasLayout(canvasId: string, positions: Array<{ id: string; position: CanvasPosition }>, viewport: CanvasViewport, expectedRevision: number): Promise<StoryCanvas> { try { const value = await super.saveCanvasLayout(canvasId, positions, viewport, expectedRevision); this.persist(); return value; } catch (error) { this.persist(); throw error; } }
@@ -150,7 +151,7 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
       documentLinks: [],
       markdownNotes: restored.markdownNotes ?? [],
       noteLinks: restored.noteLinks ?? [],
-      canvases: restored.canvases ?? [],
+      canvases: (restored.canvases ?? []).map((canvas: StoryCanvas) => ({ ...canvas, engine: canvas.engine ?? 'react-flow' })),
       canvasNodes: restored.canvasNodes ?? [],
       canvasEdges: restored.canvasEdges ?? [],
       styleProfile: { ...DEFAULT_EDITOR_STYLE, ...(restored.styleProfile ?? {}) },
@@ -159,7 +160,7 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
     const noteIds = new Set(this.state.markdownNotes.map((note) => note.id));
     this.state.canvasNodes = this.state.canvasNodes.filter((node) => noteIds.has(node.entityId));
     this.state.canvasEdges = [];
-    if (this.state.project) this.state.project.schemaVersion = Math.max(this.state.project.schemaVersion, 4);
+    if (this.state.project) this.state.project.schemaVersion = Math.max(this.state.project.schemaVersion, 5);
     this.state.status = { state: 'recovered', message: 'Recovered backup; verify the project before editing', at: now() };
     this.persist();
     return this.state.status;
@@ -213,6 +214,8 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
     if (!markdownNotesMigration) this.database.exec('BEGIN; INSERT INTO schema_migrations(version, applied_at) VALUES (3, datetime(\'now\')); COMMIT;');
     const notesOnlyMigration = this.database.prepare('SELECT version FROM schema_migrations WHERE version = 4').get();
     if (!notesOnlyMigration) this.database.exec('BEGIN; INSERT INTO schema_migrations(version, applied_at) VALUES (4, datetime(\'now\')); COMMIT;');
+    const canvasEnginesMigration = this.database.prepare('SELECT version FROM schema_migrations WHERE version = 5').get();
+    if (!canvasEnginesMigration) this.database.exec('BEGIN; INSERT INTO schema_migrations(version, applied_at) VALUES (5, datetime(\'now\')); COMMIT;');
   }
 
   private loadState(): void {
@@ -226,7 +229,7 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
       documentLinks: [],
       markdownNotes: value.markdownNotes ?? [],
       noteLinks: value.noteLinks ?? [],
-      canvases: value.canvases ?? [],
+      canvases: (value.canvases ?? []).map((canvas: StoryCanvas) => ({ ...canvas, engine: canvas.engine ?? 'react-flow' })),
       canvasNodes: value.canvasNodes ?? [],
       canvasEdges: value.canvasEdges ?? [],
       styleProfile: { ...DEFAULT_EDITOR_STYLE, ...(value.styleProfile ?? {}) },
@@ -235,7 +238,7 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
     const noteIds = new Set(this.state.markdownNotes.map((note) => note.id));
     this.state.canvasNodes = this.state.canvasNodes.filter((node) => noteIds.has(node.entityId));
     this.state.canvasEdges = [];
-    if (this.state.project) this.state.project.schemaVersion = Math.max(this.state.project.schemaVersion, 4);
+    if (this.state.project) this.state.project.schemaVersion = Math.max(this.state.project.schemaVersion, 5);
   }
 
   private persist(): void {
