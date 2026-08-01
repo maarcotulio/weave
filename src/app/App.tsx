@@ -408,6 +408,7 @@ export default function App() {
   const [pageContentWidth, setPageContentWidth] = useState<number>();
   const documentHeadRef = useRef<DocumentHead>();
   const editorDocumentRef = useRef(editorDocument);
+  const routeRef = useRef(route);
   const pageStackRef = useRef<HTMLDivElement>(null);
   const latestSaveRef = useRef<() => Promise<void>>(async () => undefined);
   const canonicalSelectionRef = useRef<CanonicalSelection>();
@@ -416,6 +417,7 @@ export default function App() {
   const noteFlushRef = useRef<{ noteId: string; flush: () => Promise<boolean> }>();
   documentHeadRef.current = documentHead;
   editorDocumentRef.current = editorDocument;
+  routeRef.current = route;
 
   useLayoutEffect(() => {
     applyTheme(theme);
@@ -425,12 +427,22 @@ export default function App() {
   useEffect(() => {
     const onHashChange = () => {
       const next = routeFromHash();
+      if (routeRef.current === 'worldbuilding' && next !== 'worldbuilding') {
+        void run(async () => {
+          if (!await flushActiveMarkdownNote()) {
+            window.history.replaceState(null, '', `#${routeRef.current}`);
+            return;
+          }
+          applyRoute(next);
+        });
+        return;
+      }
       setRoute(next);
       setWorkspaceMode(next === 'worldbuilding' ? 'worldbuilding' : 'writing');
     };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
-  }, []);
+  }, [activeWorldbuildingTabKey, worldbuildingTabs]);
   useEffect(() => {
     const onFullscreenChange = () => { if (!document.fullscreenElement) setFocusMode(false); };
     const onFocusEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && focusMode && !document.fullscreenElement) setFocusMode(false); };
@@ -521,12 +533,27 @@ export default function App() {
   const run = async (operation: () => Promise<void>) => { setBusy(true); setLocalError(''); try { await operation(); } catch (error) { setLocalError(error instanceof Error ? error.message : String(error)); } finally { setBusy(false); } };
   const rememberProject = (project: Pick<ProjectSnapshot['project'], 'directory' | 'name'>) => setRecentProjects(rememberRecentProject(project));
   const applyRoute = (next: AppRoute) => {
+    routeRef.current = next;
     setRoute(next);
     setWorkspaceMode(next === 'worldbuilding' ? 'worldbuilding' : 'writing');
     window.history.replaceState(null, '', `#${next}`);
   };
+  const registerNoteFlush = useCallback((noteId: string, flush?: () => Promise<boolean>) => {
+    if (flush) noteFlushRef.current = { noteId, flush };
+    else if (noteFlushRef.current?.noteId === noteId) noteFlushRef.current = undefined;
+  }, []);
+  const flushNoteBeforeAction = async (noteId: string) => {
+    const registered = noteFlushRef.current;
+    if (!registered || registered.noteId !== noteId) return true;
+    return registered.flush();
+  };
+  const flushActiveMarkdownNote = async () => {
+    const active = worldbuildingTabs.find((tab) => worldbuildingTabKey(tab) === activeWorldbuildingTabKey) ?? worldbuildingTabs[0];
+    return !active || active.kind !== 'note' || flushNoteBeforeAction(active.id);
+  };
   const navigate = (next: AppRoute) => void run(async () => {
     await autosave.flush();
+    if (next !== 'worldbuilding' && !await flushActiveMarkdownNote()) return;
     if (focusMode) {
       setFocusMode(false);
       if (document.fullscreenElement && document.exitFullscreen) await document.exitFullscreen().catch(() => undefined);
@@ -539,15 +566,6 @@ export default function App() {
     setFocusMode(next);
     if (next && document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen().catch(() => undefined);
   });
-  const registerNoteFlush = useCallback((noteId: string, flush?: () => Promise<boolean>) => {
-    if (flush) noteFlushRef.current = { noteId, flush };
-    else if (noteFlushRef.current?.noteId === noteId) noteFlushRef.current = undefined;
-  }, []);
-  const flushNoteBeforeAction = async (noteId: string) => {
-    const registered = noteFlushRef.current;
-    if (!registered || registered.noteId !== noteId) return true;
-    return registered.flush();
-  };
   const latestMarkdownNote = async (noteId: string): Promise<MarkdownNote | undefined> => (await repository.listMarkdownNotes()).find((note) => note.id === noteId);
   const submitFormDialog = (values: Record<string, string>) => void run(async () => { const config = formDialog; if (!config) return; await config.onSubmit(values); setFormDialog(undefined); });
 
@@ -808,15 +826,30 @@ export default function App() {
     const note = await repository.createMarkdownNote(name);
     setNoteCreateDialog(undefined);
     await refresh();
-    openWorldbuildingTab({ kind: 'note', id: note.id });
+    await openWorldbuildingTab({ kind: 'note', id: note.id });
   });
   const createWorldbuildingCanvas = () => {
     const trigger = captureFocusTrigger();
     return void run(async () => { await autosave.flush(); if (!selectedStoryId) { setLocalError('Choose a manuscript story before creating a local note canvas.'); return; } setCanvasDialog({ storyId: selectedStoryId, trigger }); });
   };
-  const submitCanvasChoice = (title: string, engine: CanvasEngine) => void run(async () => { const choice = canvasDialog; if (!choice) return; const canvas = await repository.createCanvas(choice.storyId, title, engine); setCanvasDialog(undefined); await refresh(); openWorldbuildingTab({ kind: 'canvas', id: canvas.id }); });
-  const openWorldbuildingTab = (tab: WorldbuildingTab) => { applyRoute('worldbuilding'); const key = worldbuildingTabKey(tab); setWorldbuildingTabs((current) => current.some((candidate) => worldbuildingTabKey(candidate) === key) ? current : [...current, tab]); setActiveWorldbuildingTabKey(key); };
-  const closeWorldbuildingTab = (key: string) => setWorldbuildingTabs((current) => { const index = current.findIndex((tab) => worldbuildingTabKey(tab) === key); const next = current.filter((tab) => worldbuildingTabKey(tab) !== key); setActiveWorldbuildingTabKey((active) => active === key ? (next[index] ? worldbuildingTabKey(next[index]) : next[index - 1] ? worldbuildingTabKey(next[index - 1]) : undefined) : active); return next; });
+  const submitCanvasChoice = (title: string, engine: CanvasEngine) => void run(async () => { const choice = canvasDialog; if (!choice) return; const canvas = await repository.createCanvas(choice.storyId, title, engine); setCanvasDialog(undefined); await refresh(); await openWorldbuildingTab({ kind: 'canvas', id: canvas.id }); });
+  const openWorldbuildingTab = async (tab: WorldbuildingTab, options?: { noteFlushed?: boolean }) => {
+    const current = worldbuildingTabs.find((candidate) => worldbuildingTabKey(candidate) === activeWorldbuildingTabKey) ?? worldbuildingTabs[0];
+    if (!options?.noteFlushed && current && worldbuildingTabKey(current) !== worldbuildingTabKey(tab) && !await flushActiveMarkdownNote()) return;
+    applyRoute('worldbuilding');
+    const key = worldbuildingTabKey(tab);
+    setWorldbuildingTabs((existing) => existing.some((candidate) => worldbuildingTabKey(candidate) === key) ? existing : [...existing, tab]);
+    setActiveWorldbuildingTabKey(key);
+  };
+  const activateWorldbuildingTab = async (key: string) => {
+    if (key === activeWorldbuildingTabKey) return;
+    if (!await flushActiveMarkdownNote()) return;
+    setActiveWorldbuildingTabKey(key);
+  };
+  const closeWorldbuildingTab = async (key: string) => {
+    if (key === activeWorldbuildingTabKey && !await flushActiveMarkdownNote()) return;
+    setWorldbuildingTabs((current) => { const index = current.findIndex((tab) => worldbuildingTabKey(tab) === key); const next = current.filter((tab) => worldbuildingTabKey(tab) !== key); setActiveWorldbuildingTabKey((active) => active === key ? (next[index] ? worldbuildingTabKey(next[index]) : next[index - 1] ? worldbuildingTabKey(next[index - 1]) : undefined) : active); return next; });
+  };
   const requestRenameNote = (note: MarkdownNote) => setNoteAction({ kind: 'rename', noteId: note.id, title: note.title, trigger: captureFocusTrigger() });
   const requestDeleteNote = (note: MarkdownNote) => setNoteAction({ kind: 'delete', noteId: note.id, title: note.title, phase: 'confirm', trigger: captureFocusTrigger() });
   const requestRenameCanvas = (canvas: StoryCanvas) => setCanvasAction({ kind: 'rename', canvasId: canvas.id, title: canvas.title, trigger: captureFocusTrigger() });
@@ -886,7 +919,7 @@ export default function App() {
     {focusMode && <button type="button" className="focus-mode-exit" aria-label="Exit Focus Mode" title="Exit Focus Mode" onClick={toggleFocusMode}><Minimize2 size={17} aria-hidden="true" /></button>}
     <header className="topbar"><div className="brand-cluster"><button type="button" className="sidebar-toggle" aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-expanded={!sidebarCollapsed} onClick={() => setSidebarCollapsed((current) => !current)}>☰</button><button type="button" className="brand brand-home" onClick={() => navigate('home')} aria-label="Go to Home"><span className="brand-mark">W</span><span>Weave</span><span className="offline-pill">OFFLINE</span></button></div><div className="top-actions"><button type="button" onClick={checkIntegrity} disabled={busy} title="Check project integrity">Integrity</button><button type="button" onClick={backup} disabled={busy} title="Create a recoverable backup">Backup</button><button type="button" onClick={doExport} disabled={busy || mode === 'compose'}>Export all</button><button type="button" onClick={() => navigate('settings')} disabled={busy} title="Open project settings">Settings</button><ThemeControl theme={theme} onToggle={() => setTheme(toggleTheme)} /><StatusBar status={autosaveStatus} />{autosaveStatus.state === 'error' && <button type="button" className="retry-button" onClick={retryAutosave}>Retry</button>}</div></header>
     <aside className="sidebar"><nav className="workspace-sections" role="tablist" aria-label="Primary workspaces"><button type="button" role="tab" id="manuscript-workspace-tab" aria-controls="manuscript-workspace" aria-selected={route === 'manuscript'} className={route === 'manuscript' ? 'selected' : ''} onClick={() => navigate('manuscript')}>Manuscript</button><button type="button" role="tab" id="worldbuilding-workspace-tab" aria-controls="worldbuilding-workspace" aria-selected={route === 'worldbuilding'} className={route === 'worldbuilding' ? 'selected' : ''} onClick={() => navigate('worldbuilding')}>Worldbuilding</button></nav>{workspaceMode === 'writing' ? <><div className="sidebar-heading"><span>MANUSCRIPT</span><div className="sidebar-heading-actions"><button type="button" onClick={createProject} aria-label="New project">+</button><button type="button" onClick={() => setSidebarCollapsed(true)} aria-label="Collapse sidebar">‹</button></div></div>{snapshot.stories.map((story) => <div key={story.id} className="tree-group"><div className={`manuscript-tree-row ${selectedStoryId === story.id ? 'selected' : ''}`}><button type="button" className={`tree-item story ${selectedStoryId === story.id ? 'selected' : ''}`} onClick={() => void run(async () => { await autosave.flush(); applyRoute('manuscript'); setSelectedStoryId(story.id); const firstChapter = snapshot.chapters.find((chapter) => chapter.storyId === story.id); setSelectedChapterId(firstChapter?.id); setSelectedSceneId(undefined); setMode('scene'); })}>▾ <span>{story.title}</span></button><div className="manuscript-tree-actions" aria-label={`${story.title} story actions`}><button type="button" className="manuscript-tree-action" aria-label={`Rename ${story.title}`} title={`Rename ${story.title}`} onClick={(event) => { event.stopPropagation(); renameStory(story); }}><Pencil size={13} strokeWidth={2} aria-hidden="true" /></button><button type="button" className="manuscript-tree-action manuscript-tree-delete" aria-label={`Delete ${story.title}`} title={`Delete ${story.title}`} onClick={(event) => { event.stopPropagation(); requestDeleteStory(story); }}><Trash2 size={13} strokeWidth={2} aria-hidden="true" /></button></div></div>{snapshot.chapters.filter((chapter) => chapter.storyId === story.id).map((chapter) => <div key={chapter.id} className="chapter-group"><div className={`manuscript-tree-row ${selectedChapterId === chapter.id ? 'selected' : ''}`}><button type="button" className={`tree-item chapter ${selectedChapterId === chapter.id ? 'selected' : ''}`} onClick={() => void run(async () => { await autosave.flush(); applyRoute('manuscript'); setSelectedStoryId(story.id); setSelectedChapterId(chapter.id); setSelectedSceneId(undefined); setMode('scene'); })}>▾ <span>{chapter.title}</span></button><div className="manuscript-tree-actions" aria-label={`${chapter.title} chapter actions`}><button type="button" className="manuscript-tree-action" aria-label={`Rename ${chapter.title}`} title={`Rename ${chapter.title}`} onClick={(event) => { event.stopPropagation(); renameChapter(chapter); }}><Pencil size={13} strokeWidth={2} aria-hidden="true" /></button><button type="button" className="manuscript-tree-action manuscript-tree-delete" aria-label={`Delete ${chapter.title}`} title={`Delete ${chapter.title}`} onClick={(event) => { event.stopPropagation(); requestDeleteChapter(chapter); }}><Trash2 size={13} strokeWidth={2} aria-hidden="true" /></button></div></div>{selectedChapterId === chapter.id && scenes.map((scene) => <div className={`manuscript-tree-row scene-row ${selectedSceneId === scene.id && mode === 'scene' ? 'selected' : ''}`} key={scene.id}><button type="button" className={`tree-item scene ${selectedSceneId === scene.id && mode === 'scene' ? 'selected' : ''}`} onClick={() => selectScene(scene)}><span className="scene-index">{String(scene.position + 1).padStart(2, '0')}</span>{scene.title}</button><div className="manuscript-tree-actions" aria-label={`${scene.title} scene actions`}><button type="button" className="manuscript-tree-action" aria-label={`Rename ${scene.title}`} title={`Rename ${scene.title}`} onClick={(event) => { event.stopPropagation(); renameScene(scene); }}><Pencil size={13} strokeWidth={2} aria-hidden="true" /></button><button type="button" className="manuscript-tree-action manuscript-tree-delete" aria-label={`Delete ${scene.title}`} title={`Delete ${scene.title}`} onClick={(event) => { event.stopPropagation(); requestDeleteScene(scene); }}><Trash2 size={13} strokeWidth={2} aria-hidden="true" /></button></div></div>)}{selectedChapterId === chapter.id && <button type="button" className="add-scene" onClick={addScene}>+ New scene</button>}</div>)}</div>)}<button type="button" className="add-story" onClick={newStory}>+ New story</button><div className="sidebar-bottom"><button type="button" onClick={addChapter} disabled={!selectedStoryId}>+ Chapter</button><button type="button" onClick={openProject}>Open</button></div></> : <nav className="worldbuilding-sidebar" aria-label="Worldbuilding navigation"><p className="eyebrow">WORLDBUILDING</p><section className="worldbuilding-sidebar-group"><div className="worldbuilding-sidebar-heading"><h2>Notes</h2><button type="button" className="worldbuilding-create-icon" aria-label="Create new note" title="Create new note" onClick={createWorldbuildingNote}><Plus size={14} strokeWidth={2} aria-hidden="true" /></button></div>{snapshot.markdownNotes.map((note) => { const key = worldbuildingTabKey({ kind: 'note', id: note.id }); const selected = activeWorldbuildingTabKey === key; return <div className={`worldbuilding-sidebar-note-row ${selected ? 'selected' : ''}`} key={note.id}><button type="button" className={`worldbuilding-sidebar-note-title ${selected ? 'selected' : ''}`} aria-current={selected ? 'page' : undefined} onClick={() => openWorldbuildingTab({ kind: 'note', id: note.id })}>{note.title}</button><div className="worldbuilding-sidebar-note-actions" aria-label={`${note.title} note actions`}><button type="button" className="worldbuilding-sidebar-note-action" aria-label={`Rename ${note.title}`} title={`Rename ${note.title}`} onClick={(event) => { event.stopPropagation(); requestRenameNote(note); }}><Pencil size={14} strokeWidth={2} aria-hidden="true" /></button><button type="button" className="worldbuilding-sidebar-note-action worldbuilding-sidebar-note-delete" aria-label={`Delete ${note.title}`} title={`Delete ${note.title}`} onClick={(event) => { event.stopPropagation(); requestDeleteNote(note); }}><Trash2 size={14} strokeWidth={2} aria-hidden="true" /></button></div></div>; })}{snapshot.markdownNotes.length === 0 && <p>No notes yet.</p>}</section><section className="worldbuilding-sidebar-group"><div className="worldbuilding-sidebar-heading"><h2>Canvases</h2><button type="button" className="worldbuilding-create-icon" aria-label="Create new canvas" title="Create new canvas" onClick={createWorldbuildingCanvas}><Plus size={14} strokeWidth={2} aria-hidden="true" /></button></div>{snapshot.canvases.map((canvas) => { const key = worldbuildingTabKey({ kind: 'canvas', id: canvas.id }); const selected = activeWorldbuildingTabKey === key; return <div className={`worldbuilding-sidebar-canvas-row ${selected ? 'selected' : ''}`} key={canvas.id}><button type="button" className={`worldbuilding-sidebar-canvas-title ${selected ? 'selected' : ''}`} aria-current={selected ? 'page' : undefined} onClick={() => openWorldbuildingTab({ kind: 'canvas', id: canvas.id })}>{canvas.title}</button><div className="worldbuilding-sidebar-canvas-actions" aria-label={`${canvas.title} canvas actions`}><button type="button" className="worldbuilding-sidebar-canvas-action" aria-label={`Rename ${canvas.title}`} title={`Rename ${canvas.title}`} onClick={(event) => { event.stopPropagation(); requestRenameCanvas(canvas); }}><Pencil size={14} strokeWidth={2} aria-hidden="true" /></button><button type="button" className="worldbuilding-sidebar-canvas-action worldbuilding-sidebar-canvas-delete" aria-label={`Delete ${canvas.title}`} title={`Delete ${canvas.title}`} onClick={(event) => { event.stopPropagation(); requestDeleteCanvas(canvas); }}><Trash2 size={14} strokeWidth={2} aria-hidden="true" /></button></div></div>; })}{snapshot.canvases.length === 0 && <p>No canvases yet.</p>}</section><p className="worldbuilding-sidebar-note">Open tabs remain available when returning to Manuscript.</p></nav>}</aside>
-    {route === 'home' ? <HomePage stats={snapshot.writingStats} activity={snapshot.writingActivity} onOpenManuscript={() => navigate('manuscript')} /> : route === 'settings' ? <SettingsPage styleProfile={styleProfile} stats={snapshot.writingStats} backups={snapshot.backups} integrityReport={integrityReport} lastBackup={lastBackup} busy={busy} onSaveGoal={updateGoal} onSaveStyle={updateStyle} onCheckIntegrity={checkIntegrity} onCreateBackup={backup} onRecoverBackup={recoverBackup} /> : workspaceMode === 'worldbuilding' ? <WorldbuildingWorkspace repository={repository} snapshot={snapshot} tabs={worldbuildingTabs} activeTabKey={activeWorldbuildingTabKey} onOpenTab={openWorldbuildingTab} onActivateTab={setActiveWorldbuildingTabKey} onCloseTab={closeWorldbuildingTab} onCreateNote={createWorldbuildingNote} onCreateCanvas={createWorldbuildingCanvas} onRefresh={async () => { await refresh(); }} onRegisterNoteFlush={registerNoteFlush} onReturnToManuscript={() => navigate('manuscript')} onError={setLocalError} /> : <main id="manuscript-workspace" role="tabpanel" aria-labelledby="manuscript-workspace-tab" className="workspace"><div className="workspace-head"><div><p className="eyebrow">{activeChapter?.title ?? 'Chapter'}</p><h1>{mode === 'continuous' ? 'Continuous draft' : mode === 'compose' ? 'Composed chapter' : activeScene?.title ?? 'Choose a scene'}</h1></div><div className="workspace-manuscript-actions"><div className="manuscript-version-actions"><button type="button" className="secondary-button" disabled={busy} onClick={() => openManuscriptVersionDialog('save')}>Save version</button><button type="button" className="icon-button version-help-button" disabled={busy} aria-label="Explain manuscript versions" title="About manuscript versions" onClick={() => openManuscriptVersionDialog('help')}><CircleHelp size={16} aria-hidden="true" /></button>{snapshot.manuscriptVersions.length > 0 && <button type="button" className="text-button version-history-button" disabled={busy} onClick={() => openManuscriptVersionDialog('history')}>Versions ({snapshot.manuscriptVersions.length})</button>}</div><div className="mode-switch"><button type="button" className={mode === 'scene' ? 'active' : ''} onClick={() => activeScene && selectScene(activeScene)}>Scenes</button><button type="button" className={mode === 'compose' ? 'active' : ''} onClick={compose}>Chapter view</button><button type="button" className={mode === 'continuous' ? 'active' : ''} onClick={openContinuous}>Continuous draft</button></div></div></div>
+    {route === 'home' ? <HomePage stats={snapshot.writingStats} activity={snapshot.writingActivity} onOpenManuscript={() => navigate('manuscript')} /> : route === 'settings' ? <SettingsPage styleProfile={styleProfile} stats={snapshot.writingStats} backups={snapshot.backups} integrityReport={integrityReport} lastBackup={lastBackup} busy={busy} onSaveGoal={updateGoal} onSaveStyle={updateStyle} onCheckIntegrity={checkIntegrity} onCreateBackup={backup} onRecoverBackup={recoverBackup} /> : workspaceMode === 'worldbuilding' ? <WorldbuildingWorkspace repository={repository} snapshot={snapshot} tabs={worldbuildingTabs} activeTabKey={activeWorldbuildingTabKey} onOpenTab={openWorldbuildingTab} onActivateTab={activateWorldbuildingTab} onCloseTab={closeWorldbuildingTab} onCreateNote={createWorldbuildingNote} onCreateCanvas={createWorldbuildingCanvas} onRefresh={async () => { await refresh(); }} onRegisterNoteFlush={registerNoteFlush} onFlushActiveNote={flushNoteBeforeAction} onReturnToManuscript={() => navigate('manuscript')} onError={setLocalError} /> : <main id="manuscript-workspace" role="tabpanel" aria-labelledby="manuscript-workspace-tab" className="workspace"><div className="workspace-head"><div><p className="eyebrow">{activeChapter?.title ?? 'Chapter'}</p><h1>{mode === 'continuous' ? 'Continuous draft' : mode === 'compose' ? 'Composed chapter' : activeScene?.title ?? 'Choose a scene'}</h1></div><div className="workspace-manuscript-actions"><div className="manuscript-version-actions"><button type="button" className="secondary-button" disabled={busy} onClick={() => openManuscriptVersionDialog('save')}>Save version</button><button type="button" className="icon-button version-help-button" disabled={busy} aria-label="Explain manuscript versions" title="About manuscript versions" onClick={() => openManuscriptVersionDialog('help')}><CircleHelp size={16} aria-hidden="true" /></button>{snapshot.manuscriptVersions.length > 0 && <button type="button" className="text-button version-history-button" disabled={busy} onClick={() => openManuscriptVersionDialog('history')}>Versions ({snapshot.manuscriptVersions.length})</button>}</div><div className="mode-switch"><button type="button" className={mode === 'scene' ? 'active' : ''} onClick={() => activeScene && selectScene(activeScene)}>Scenes</button><button type="button" className={mode === 'compose' ? 'active' : ''} onClick={compose}>Chapter view</button><button type="button" className={mode === 'continuous' ? 'active' : ''} onClick={openContinuous}>Continuous draft</button></div></div></div>
       {localError && <div className="inline-error" role="alert">{localError}</div>}
       <GoalPanel stats={snapshot.writingStats} onSaveTarget={updateGoal} />
       <div className="page-stack" ref={pageStackRef} aria-label="Manuscript pages"><StyleControls profile={styleProfile} onChange={updateStyle} disabled={mode === 'compose'} focusMode={focusMode} onToggleFocus={toggleFocusMode} />{pages.map((page, pageIndex) => <section className="paper-page" style={pageStyle} key={`${pageIndex}-${page.document.blocks[0]?.id ?? 'empty'}`}><div className="paper-meta"><span>{mode === 'compose' ? 'NON-DESTRUCTIVE COMPOSITION' : mode === 'continuous' ? 'SEPARATE REVISION · SOURCE SNAPSHOT PRESERVED' : 'SCENE DOCUMENT'}</span><span>{pageDimensions(styleProfile.pageSize).label} · Page {pageIndex + 1} of {pages.length}</span></div><Editor document={page.document} styleProfile={styleProfile} onChange={(value) => updatePage(pageIndex, value)} onSelectionChange={rememberSelection} readOnly={mode === 'compose'} /><div className="paper-footer"><span>{mode === 'compose' ? 'Scene documents remain the source.' : 'Structured document · changes save automatically'}</span>{documentHead && pageIndex === pages.length - 1 && <span>revision {documentHead.revision}</span>}</div></section>)}</div>

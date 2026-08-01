@@ -172,6 +172,31 @@ describe('offline persistence and accessible workspace', () => {
     expect(readFileSync(join(process.cwd(), 'src/app/base.css'), 'utf8')).toContain(':focus-visible');
   });
 
+  it('flushes the active note before index or note-link navigation and preserves failed-save retry behavior', () => {
+    const component = readFileSync(join(process.cwd(), 'src/app/Worldbuilding.tsx'), 'utf8');
+    const app = readFileSync(join(process.cwd(), 'src/app/App.tsx'), 'utf8');
+    expect(component).toContain('onFlushActiveNote: (noteId: string) => Promise<boolean>');
+    expect(component).toContain('if (note && note.id !== id && !await onFlushActiveNote(note.id)) return;');
+    expect(component).toContain('onOpen={(id) => { void openNote(id); }}');
+    expect(component).toContain('Save needs retry');
+    expect(app).toContain('onFlushActiveNote={flushNoteBeforeAction}');
+    expect(app).toContain('const flushNoteBeforeAction = async (noteId: string) => {');
+  });
+
+  it('flushes active Markdown notes before every Worldbuilding navigation seam', () => {
+    const component = readFileSync(join(process.cwd(), 'src/app/Worldbuilding.tsx'), 'utf8');
+    const app = readFileSync(join(process.cwd(), 'src/app/App.tsx'), 'utf8');
+    expect(component).toContain('onActivate={onActivateTab}');
+    expect(component).toContain('onClose={onCloseTab}');
+    expect(component).toContain("onOpenTab({ kind: 'note', id }, { noteFlushed: true });");
+    expect(app).toContain('const flushActiveMarkdownNote = async () => {');
+    expect(app).toContain('if (next !== \'worldbuilding\' && !await flushActiveMarkdownNote()) return;');
+    expect(app).toContain('if (key === activeWorldbuildingTabKey && !await flushActiveMarkdownNote()) return;');
+    expect(app).toContain('if (routeRef.current === \'worldbuilding\' && next !== \'worldbuilding\')');
+    expect(app).toContain('if (!await flushActiveMarkdownNote()) {');
+    expect(app).toContain('onActivateTab={activateWorldbuildingTab}');
+  });
+
   it('ships accessible workspace tabs, exact empty actions, and a note-only React Flow fallback', () => {
     const component = readFileSync(join(process.cwd(), 'src/app/Worldbuilding.tsx'), 'utf8');
     expect(component).toContain("from '@xyflow/react'");

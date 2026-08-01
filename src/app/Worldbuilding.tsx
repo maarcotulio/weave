@@ -4,6 +4,7 @@ import { Excalidraw } from '@excalidraw/excalidraw';
 import '@xyflow/react/dist/style.css';
 import '@excalidraw/excalidraw/index.css';
 import { effectiveTextMargins, pageDimensions } from '../domain/pagination';
+import { buildWorldbuildingIndex, type WorldbuildingIndexEntry } from '../domain/worldbuilding-index';
 import { MarkdownPageEditor } from './MarkdownPageEditor';
 import type { ProjectRepository } from '../domain/repository';
 import type { CanvasEngine, CanvasProjection, CanvasViewport, ExcalidrawSceneState, MarkdownNote, ProjectSnapshot, StoryCanvas } from '../domain/types';
@@ -13,6 +14,26 @@ export const worldbuildingTabKey = (tab: WorldbuildingTab) => `${tab.kind}:${tab
 
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function WorldbuildingIndexPanel({ snapshot, onOpen }: { snapshot: ProjectSnapshot; onOpen: (id: string) => void }) {
+  const [query, setQuery] = useState('');
+  const [typeFilter, setTypeFilter] = useState('all');
+  const entries = useMemo(() => buildWorldbuildingIndex(snapshot.markdownNotes), [snapshot.markdownNotes]);
+  const types = useMemo(() => [...new Set(entries.flatMap((entry) => entry.type ? [entry.type] : []))], [entries]);
+  const filtered = entries.filter((entry) => {
+    const needle = query.trim().toLowerCase();
+    const matchesQuery = !needle || entry.title.toLowerCase().includes(needle) || entry.type?.includes(needle) || entry.conflictingTypes?.some((type) => type.includes(needle));
+    const matchesType = typeFilter === 'all' || (typeFilter === 'unclassified' && entry.status === 'unclassified') || (typeFilter === 'conflict' && entry.status === 'conflict') || entry.type === typeFilter;
+    return matchesQuery && matchesType;
+  });
+  const label = (entry: WorldbuildingIndexEntry) => entry.status === 'classified' ? entry.type : entry.status === 'conflict' ? `Conflict · ${entry.conflictingTypes?.join(', ')}` : 'Unclassified';
+  return <section className="worldbuilding-index" aria-label="Derived worldbuilding index">
+    <header className="worldbuilding-index-head"><div><p className="eyebrow">DERIVED NOTE INDEX</p><h1>Worldbuilding index</h1><p>Characters, places, and other typed notes are indexed from Markdown without creating entities.</p></div><span className="worldbuilding-index-count">{filtered.length} of {entries.length} notes</span></header>
+    <p className="worldbuilding-index-convention"><strong>Convention:</strong> put a single explicit field at the start of a note: <code>---</code> then <code>type: character</code> (or <code>place</code>, or another type) then <code>---</code>. Notes without a type stay unclassified. Conflicting values are shown as conflicts and never guessed.</p>
+    <div className="worldbuilding-index-filters"><label>Search notes<input aria-label="Search worldbuilding index" value={query} placeholder="Title or type" onChange={(event) => setQuery(event.target.value)} /></label><label>Filter by type<select aria-label="Filter worldbuilding index by type" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}><option value="all">All types</option>{types.map((type) => <option key={type} value={type}>{type}</option>)}<option value="unclassified">Unclassified</option><option value="conflict">Conflicts</option></select></label></div>
+    {filtered.length === 0 ? <p className="worldbuilding-index-empty">No notes match this filter.</p> : <ul className="worldbuilding-index-list">{filtered.map((entry) => <li key={entry.sourceNoteId} className="worldbuilding-index-item"><div><strong>{entry.title || 'Untitled note'}</strong><span className={entry.status === 'conflict' ? 'worldbuilding-index-conflict' : undefined}>{label(entry)}</span></div><button type="button" className="text-button" onClick={() => onOpen(entry.sourceNoteId)}>Open source note</button></li>)}</ul>}
+  </section>;
 }
 
 function TabStrip({ tabs, activeKey, snapshot, onActivate, onClose }: { tabs: WorldbuildingTab[]; activeKey?: string; snapshot: ProjectSnapshot; onActivate: (key: string) => void; onClose: (key: string) => void }) {
@@ -192,10 +213,14 @@ function ExcalidrawCanvas({ repository, canvas, onRefresh, onError }: { reposito
   return <section className="canvas-tab-panel excalidraw-tab-panel" id={`world-panel-canvas:${canvas.id}`} role="tabpanel" aria-labelledby={`world-tab-canvas:${canvas.id}`}><header className="note-editor-head"><div><p className="eyebrow">USER-CREATED NOTE CANVAS · EXCALIDRAW</p><h1>{canvas.title}</h1><p>Excalidraw scene elements, view state, and local image files are persisted in the project. This canvas is independent from the React Flow note projection.</p></div><span className="note-save-state" role="status">Local scene · revision {pendingRevision.current}</span></header><div className="excalidraw-shell" role="region" aria-label="Excalidraw canvas"><Excalidraw initialData={initialData as never} onChange={(elements, appState, files) => persist(elements, appState, files)} autoFocus={false} /></div><p className="canvas-accessibility-note">Use Tab to reach drawing controls and keyboard shortcuts; the canvas remains local-only and does not enable collaboration.</p></section>;
 }
 
-export function WorldbuildingWorkspace({ repository, snapshot, tabs, activeTabKey, onOpenTab, onActivateTab, onCloseTab, onCreateNote, onCreateCanvas, onRefresh, onRegisterNoteFlush, onReturnToManuscript, onError }: { repository: ProjectRepository; snapshot: ProjectSnapshot; tabs: WorldbuildingTab[]; activeTabKey?: string; onOpenTab: (tab: WorldbuildingTab) => void; onActivateTab: (key: string) => void; onCloseTab: (key: string) => void; onCreateNote: () => void; onCreateCanvas: () => void; onRefresh: () => Promise<void>; onRegisterNoteFlush: (noteId: string, flush?: () => Promise<boolean>) => void; onReturnToManuscript: () => void; onError: (message: string) => void }) {
+export function WorldbuildingWorkspace({ repository, snapshot, tabs, activeTabKey, onOpenTab, onActivateTab, onCloseTab, onCreateNote, onCreateCanvas, onRefresh, onRegisterNoteFlush, onFlushActiveNote, onReturnToManuscript, onError }: { repository: ProjectRepository; snapshot: ProjectSnapshot; tabs: WorldbuildingTab[]; activeTabKey?: string; onOpenTab: (tab: WorldbuildingTab, options?: { noteFlushed?: boolean }) => void; onActivateTab: (key: string) => void; onCloseTab: (key: string) => void; onCreateNote: () => void; onCreateCanvas: () => void; onRefresh: () => Promise<void>; onRegisterNoteFlush: (noteId: string, flush?: () => Promise<boolean>) => void; onFlushActiveNote: (noteId: string) => Promise<boolean>; onReturnToManuscript: () => void; onError: (message: string) => void }) {
   const active = tabs.find((tab) => worldbuildingTabKey(tab) === activeTabKey) ?? tabs[0];
   const note = active?.kind === 'note' ? snapshot.markdownNotes.find((candidate) => candidate.id === active.id) : undefined;
   const canvas = active?.kind === 'canvas' ? snapshot.canvases.find((candidate) => candidate.id === active.id) : undefined;
   const engine: CanvasEngine = canvas?.engine ?? 'react-flow';
-  return <main id="worldbuilding-workspace" role="tabpanel" aria-labelledby="worldbuilding-workspace-tab" className="worldbuilding-workspace"><section className="worldbuilding-main">{tabs.length > 0 && <TabStrip tabs={tabs} activeKey={active ? worldbuildingTabKey(active) : undefined} snapshot={snapshot} onActivate={onActivateTab} onClose={onCloseTab} />}{note ? <NoteEditor repository={repository} note={note} snapshot={snapshot} onRefresh={onRefresh} onOpen={(id) => onOpenTab({ kind: 'note', id })} onRegisterNoteFlush={onRegisterNoteFlush} onError={onError} /> : canvas ? engine === 'excalidraw' ? <ExcalidrawCanvas repository={repository} canvas={canvas} onRefresh={onRefresh} onError={onError} /> : <NoteCanvas repository={repository} canvas={canvas} snapshot={snapshot} onRefresh={onRefresh} onError={onError} /> : <section className="worldbuilding-empty" aria-label="Worldbuilding empty state"><p className="eyebrow">LOCAL WORLDBUILDING</p><p>Create a Markdown page or choose a canvas engine.</p><button type="button" onClick={onCreateNote}>Create new note</button><button type="button" onClick={onCreateCanvas}>Create new canvas</button><button type="button" onClick={onReturnToManuscript}>Close</button></section>}</section></main>;
+  const openNote = async (id: string) => {
+    if (note && note.id !== id && !await onFlushActiveNote(note.id)) return;
+    onOpenTab({ kind: 'note', id }, { noteFlushed: true });
+  };
+  return <main id="worldbuilding-workspace" role="tabpanel" aria-labelledby="worldbuilding-workspace-tab" className="worldbuilding-workspace"><section className="worldbuilding-main"><WorldbuildingIndexPanel snapshot={snapshot} onOpen={(id) => { void openNote(id); }} />{tabs.length > 0 && <TabStrip tabs={tabs} activeKey={active ? worldbuildingTabKey(active) : undefined} snapshot={snapshot} onActivate={onActivateTab} onClose={onCloseTab} />}{note ? <NoteEditor repository={repository} note={note} snapshot={snapshot} onRefresh={onRefresh} onOpen={(id) => { void openNote(id); }} onRegisterNoteFlush={onRegisterNoteFlush} onError={onError} /> : canvas ? engine === 'excalidraw' ? <ExcalidrawCanvas repository={repository} canvas={canvas} onRefresh={onRefresh} onError={onError} /> : <NoteCanvas repository={repository} canvas={canvas} snapshot={snapshot} onRefresh={onRefresh} onError={onError} /> : <section className="worldbuilding-empty" aria-label="Worldbuilding empty state"><p className="eyebrow">LOCAL WORLDBUILDING</p><p>Create a Markdown page or choose a canvas engine.</p><button type="button" onClick={onCreateNote}>Create new note</button><button type="button" onClick={onCreateCanvas}>Create new canvas</button><button type="button" onClick={onReturnToManuscript}>Close</button></section>}</section></main>;
 }
