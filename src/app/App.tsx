@@ -13,6 +13,7 @@ import { applyTheme, persistTheme, readStoredTheme, toggleTheme, type Theme } fr
 import { canDismissWithEscape, firstEnabledFocusIndex, trappedFocusIndex } from '../domain/modal-focus';
 import { manuscriptDeleteImpact } from '../domain/manuscript-lifecycle';
 import { documentText } from '../domain/manuscript-versions';
+import { readRecentProjects, rememberRecentProject, removeRecentProject, validateProjectDirectory, type RecentProject } from '../domain/recent-projects';
 import { HomePage } from './Home';
 import { SettingsPage } from './Settings';
 import { UiKit } from './UiKit';
@@ -372,6 +373,7 @@ function ManuscriptDeleteDialog({ item, busy, onCancel, onConfirm }: { item: Man
 export default function App() {
   const repository = useMemo<ProjectRepository>(() => isDesktop ? new TauriProjectRepository() : new InMemoryProjectRepository(), []);
   const [theme, setTheme] = useState<Theme>(() => readStoredTheme());
+  const [recentProjects, setRecentProjects] = useState<RecentProject[]>(() => readRecentProjects());
   const [snapshot, setSnapshot] = useState<ProjectSnapshot>();
   const [route, setRoute] = useState<AppRoute>(() => routeFromHash());
   const [selectedStoryId, setSelectedStoryId] = useState<string>();
@@ -517,6 +519,7 @@ export default function App() {
   }, [autosave]);
 
   const run = async (operation: () => Promise<void>) => { setBusy(true); setLocalError(''); try { await operation(); } catch (error) { setLocalError(error instanceof Error ? error.message : String(error)); } finally { setBusy(false); } };
+  const rememberProject = (project: Pick<ProjectSnapshot['project'], 'directory' | 'name'>) => setRecentProjects(rememberRecentProject(project));
   const applyRoute = (next: AppRoute) => {
     setRoute(next);
     setWorkspaceMode(next === 'worldbuilding' ? 'worldbuilding' : 'writing');
@@ -611,13 +614,38 @@ export default function App() {
       setFormDialog({ eyebrow: 'NEW PROJECT', title: 'Create a project', fields: [
         { key: 'directory', label: 'Project directory', value: `${isDesktop ? '' : '/tmp/'}my-weave-project` },
         { key: 'name', label: 'Project name', value: 'My story' }
-      ], trigger, onSubmit: async (values) => { const directory = values.directory.trim(); const name = values.name.trim() || 'My story'; await repository.createProject(directory, name); const story = await repository.createStory('Story 1'); const chapter = await repository.createChapter(story.id, 'Chapter 1'); await repository.createScene(chapter.id, 'Scene 1'); await repository.createScene(chapter.id, 'Scene 2'); await refresh(false); applyRoute('home'); } });
+      ], trigger, onSubmit: async (values) => {
+        const directory = validateProjectDirectory(values.directory);
+        const name = values.name.trim() || 'My story';
+        const project = await repository.createProject(directory, name);
+        rememberProject(project);
+        const story = await repository.createStory('Story 1');
+        const chapter = await repository.createChapter(story.id, 'Chapter 1');
+        await repository.createScene(chapter.id, 'Scene 1');
+        await repository.createScene(chapter.id, 'Scene 2');
+        await refresh(false);
+        applyRoute('home');
+      } });
     });
   };
+  const openProjectAt = (directory: string, recentName?: string) => void run(async () => {
+    await autosave.flush();
+    const validatedDirectory = validateProjectDirectory(directory);
+    // The browser fallback has no filesystem to reopen. Recent entries are
+    // intentionally metadata-only, so create an in-memory shell from that
+    // metadata rather than pretending localStorage contains project content.
+    const project = !isDesktop && recentName
+      ? await repository.createProject(validatedDirectory, recentName)
+      : await repository.openProject(validatedDirectory);
+    rememberProject(project);
+    await refresh(false);
+    applyRoute('home');
+  });
   const openProject = () => {
     const trigger = captureFocusTrigger();
-    return void run(async () => { await autosave.flush(); setFormDialog({ eyebrow: 'OPEN PROJECT', title: 'Open a project', fields: [{ key: 'directory', label: 'Project directory', value: '', placeholder: '/path/to/project' }], trigger, onSubmit: async (values) => { await repository.openProject(values.directory.trim()); await refresh(false); applyRoute('home'); } }); });
+    return void run(async () => { await autosave.flush(); setFormDialog({ eyebrow: 'OPEN PROJECT', title: 'Open a project', fields: [{ key: 'directory', label: 'Project directory', value: '', placeholder: '/path/to/project' }], trigger, onSubmit: async (values) => { const project = await repository.openProject(validateProjectDirectory(values.directory)); rememberProject(project); await refresh(false); applyRoute('home'); } }); });
   };
+  const forgetRecentProject = (directory: string) => setRecentProjects(removeRecentProject(directory));
   const addScene = () => void run(async () => { if (!selectedChapterId) return; const scene = await repository.createScene(selectedChapterId, `Scene ${scenes.length + 1}`); await refresh(); setSelectedSceneId(scene.id); });
   const addChapter = () => void run(async () => { if (!selectedStoryId) return; const chapterNumber = (snapshot?.chapters.filter((item) => item.storyId === selectedStoryId).length ?? 0) + 1; await repository.createChapter(selectedStoryId, `Chapter ${chapterNumber}`); await refresh(false); });
   const renameStory = (story: { id: string; title: string }) => {
@@ -850,7 +878,7 @@ export default function App() {
 
   if (route === 'ui') return <UiKit />;
 
-  if (!snapshot) return <><main className="welcome"><div className="welcome-card"><div className="welcome-card-top"><div className="mark">W</div><ThemeControl theme={theme} onToggle={() => setTheme(toggleTheme)} /></div><p className="eyebrow">OFFLINE DESKTOP WRITING</p><h1>Make room for the story.</h1><p className="welcome-copy">Weave keeps your manuscript, revisions, SQLite database, and recovery files in a visible <code>.weave</code> project directory. No server. No network. No guesswork.</p><div className="welcome-actions"><button type="button" className="primary-button" onClick={createProject} disabled={busy}>Create project</button><button type="button" className="secondary-button" onClick={openProject} disabled={busy}>Open project</button></div>{localError && <p className="error-message">{localError}</p>}<p className="offline-note"><span className="status-dot" /> local-only · SQLite · revisioned</p></div></main>{formDialog && <FormDialog config={formDialog} busy={busy} onCancel={() => setFormDialog(undefined)} onSubmit={submitFormDialog} />}</>;
+  if (!snapshot) return <><main className="welcome"><div className="welcome-card"><div className="welcome-card-top"><div className="mark">W</div><ThemeControl theme={theme} onToggle={() => setTheme(toggleTheme)} /></div><p className="eyebrow">OFFLINE DESKTOP WRITING</p><h1>Make room for the story.</h1><p className="welcome-copy">Weave keeps your manuscript, revisions, SQLite database, and recovery files in a visible <code>.weave</code> project directory. No server. No network. No guesswork.</p><div className="welcome-actions"><button type="button" className="primary-button" onClick={createProject} disabled={busy}>Create project</button><button type="button" className="secondary-button" onClick={openProject} disabled={busy}>Open project</button></div>{recentProjects.length > 0 && <section className="recent-projects" aria-labelledby="recent-projects-title"><div className="recent-projects-heading"><h2 id="recent-projects-title">Recent projects</h2><span>local only</span></div><ul>{recentProjects.map((project) => <li key={project.directory}><button type="button" className="recent-project-open" onClick={() => openProjectAt(project.directory, project.name)} disabled={busy}><strong>{project.name}</strong><small>{project.directory}</small></button><button type="button" className="recent-project-remove" onClick={() => forgetRecentProject(project.directory)} disabled={busy} aria-label={`Remove ${project.name} from recent projects`}>Remove</button></li>)}</ul></section>}{localError && <p className="error-message">{localError}</p>}<p className="offline-note"><span className="status-dot" /> local-only · SQLite · revisioned</p></div></main>{formDialog && <FormDialog config={formDialog} busy={busy} onCancel={() => setFormDialog(undefined)} onSubmit={submitFormDialog} />}</>;
 
   const activeChapter: Chapter | undefined = snapshot.chapters.find((chapter) => chapter.id === selectedChapterId);
   const activeScene = scenes.find((scene) => scene.id === selectedSceneId);
