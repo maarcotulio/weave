@@ -1,7 +1,7 @@
 use chrono::{Local, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::{fs, path::{Path, PathBuf}, sync::Mutex};
+use std::{fs, io::ErrorKind, path::{Component, Path, PathBuf}, sync::Mutex};
 use tauri::State;
 use uuid::Uuid;
 
@@ -184,23 +184,135 @@ impl Default for Store { fn default() -> Self { Self { project: None, stories: v
 struct AppState { root: Option<PathBuf>, store: Store }
 impl Default for AppState { fn default() -> Self { Self { root: None, store: Store::default() } } }
 impl AppState {
-    fn db_path(&self) -> Result<PathBuf, String> { self.root.as_ref().map(|root| root.join(".weave").join("project.db")).ok_or_else(|| "No project is open".into()) }
+    fn db_path(&self) -> Result<PathBuf, String> {
+        let root = self.root.as_ref().ok_or_else(|| "No project is open".to_string())?;
+        safe_database_path(root, true)
+    }
     fn persist(&self) -> Result<(), String> {
         let path = self.db_path()?;
         let json = serde_json::to_string(&self.store).map_err(|e| e.to_string())?;
         let connection = Connection::open(&path).map_err(|e| e.to_string())?;
         connection.execute("INSERT INTO project_state(id, state_json, updated_at) VALUES (1, ?1, ?2) ON CONFLICT(id) DO UPDATE SET state_json=excluded.state_json, updated_at=excluded.updated_at", params![json, timestamp()]).map_err(|e| e.to_string())?;
-        let latest = path.parent().unwrap().join("files").join("latest.json");
+        let files = path.parent().ok_or_else(|| "Project database has no parent directory".to_string())?.join("files");
+        ensure_existing_directory(&files, "project files directory")?;
+        let latest = files.join("latest.json");
+        ensure_safe_write_target(&latest, "latest project state")?;
         fs::write(latest, json).map_err(|e| e.to_string())
     }
 }
 
-fn database_for(root: &Path) -> Result<PathBuf, String> {
+fn validate_project_root(root: &Path) -> Result<(), String> {
+    if root.as_os_str().is_empty() { return Err("A project directory is required".into()); }
+    if root.to_string_lossy().contains('\0') { return Err("The project directory contains an invalid character".into()); }
+    for component in root.components() {
+        match component {
+            Component::CurDir | Component::ParentDir => return Err("Choose a project directory without traversal aliases".into()),
+            Component::Normal(value) if value == ".weave" => return Err("Choose the project directory, not its .weave folder".into()),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn normalized_project_directory(root: &Path) -> Result<String, String> {
+    validate_project_root(root)?;
+    let mut normalized = PathBuf::new();
+    for component in root.components() { normalized.push(component.as_os_str()); }
+    Ok(normalized.to_string_lossy().into_owned())
+}
+
+/// Creates only non-symlink directories, checking every existing component.
+/// These checks are not race-proof: another process can replace a path after
+/// validation, so this remains a best-effort safeguard at the filesystem API boundary.
+fn ensure_directory_chain(path: &Path) -> Result<(), String> {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        current.push(component.as_os_str());
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => return Err(format!("Unsafe symlink in project path: {}", current.display())),
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => return Err(format!("Project path is not a directory: {}", current.display())),
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                fs::create_dir(&current).map_err(|error| format!("Cannot create project directory {}: {error}", current.display()))?;
+                let metadata = fs::symlink_metadata(&current).map_err(|error| error.to_string())?;
+                if metadata.file_type().is_symlink() || !metadata.is_dir() { return Err(format!("Unsafe project directory: {}", current.display())); }
+            }
+            Err(error) => return Err(format!("Cannot inspect project path {}: {error}", current.display())),
+        }
+    }
+    Ok(())
+}
+
+fn ensure_existing_directory(path: &Path, label: &str) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| format!("Cannot inspect {label}: {error}"))?;
+    if metadata.file_type().is_symlink() { return Err(format!("Unsafe symlink for {label}")); }
+    if !metadata.is_dir() { return Err(format!("{label} is not a directory")); }
+    Ok(())
+}
+
+fn ensure_safe_file(path: &Path, label: &str) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(format!("Unsafe symlink for {label}")),
+        Ok(metadata) if metadata.is_file() => Ok(()),
+        Ok(_) => Err(format!("{label} is not a regular file")),
+        Err(error) if error.kind() == ErrorKind::NotFound => Err(format!("{label} does not exist")),
+        Err(error) => Err(format!("Cannot inspect {label}: {error}")),
+    }
+}
+
+fn ensure_safe_write_target(path: &Path, label: &str) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(format!("Unsafe symlink for {label}")),
+        Ok(metadata) if metadata.is_file() => Ok(()),
+        Ok(_) => Err(format!("{label} is not a regular file")),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("Cannot inspect {label}: {error}")),
+    }
+}
+
+fn safe_database_path(root: &Path, require_existing: bool) -> Result<PathBuf, String> {
+    validate_project_root(root)?;
+    ensure_existing_directory(root, "project directory")?;
     let weave = root.join(".weave");
-    fs::create_dir_all(weave.join("files")).map_err(|e| e.to_string())?;
-    fs::create_dir_all(weave.join("backups")).map_err(|e| e.to_string())?;
+    ensure_existing_directory(&weave, ".weave directory")?;
+    ensure_existing_directory(&weave.join("files"), "project files directory")?;
+    ensure_existing_directory(&weave.join("backups"), "project backups directory")?;
     let db = weave.join("project.db");
+    if require_existing { ensure_safe_file(&db, "project database")?; }
+    for sidecar in ["project.db-wal", "project.db-shm"] {
+        let path = weave.join(sidecar);
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => return Err(format!("Unsafe symlink for database sidecar {sidecar}")),
+            Ok(metadata) if !metadata.is_file() => return Err(format!("Database sidecar {sidecar} is not a regular file")),
+            Ok(_) => {},
+            Err(error) if error.kind() == ErrorKind::NotFound => {},
+            Err(error) => return Err(format!("Cannot inspect database sidecar {sidecar}: {error}")),
+        }
+    }
+    Ok(db)
+}
+
+fn database_for(root: &Path, allow_create: bool) -> Result<PathBuf, String> {
+    validate_project_root(root)?;
+    ensure_directory_chain(root)?;
+    let weave = root.join(".weave");
+    ensure_directory_chain(&weave.join("files"))?;
+    ensure_directory_chain(&weave.join("backups"))?;
+    let db = weave.join("project.db");
+    match fs::symlink_metadata(&db) {
+        Ok(metadata) if metadata.file_type().is_symlink() => return Err("Unsafe symlink for project database".into()),
+        Ok(metadata) if !metadata.is_file() => return Err("Project database is not a regular file".into()),
+        Ok(_) if !allow_create => {},
+        Ok(_) => return Err("A Weave project already exists at this directory".into()),
+        Err(error) if error.kind() == ErrorKind::NotFound && allow_create => {},
+        Err(error) if error.kind() == ErrorKind::NotFound => return Err("No Weave project was found at this directory".into()),
+        Err(error) => return Err(format!("Cannot inspect project database: {error}")),
+    }
+    // Validate SQLite sidecars before opening in WAL mode; SQLite may create or
+    // use them during the connection, so symlinks must be rejected first.
+    safe_database_path(root, false)?;
     let connection = Connection::open(&db).map_err(|e| e.to_string())?;
+    ensure_safe_file(&db, "project database")?;
     connection.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS project_state(id INTEGER PRIMARY KEY CHECK(id=1), state_json TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS backups(id TEXT PRIMARY KEY, path TEXT NOT NULL, created_at TEXT NOT NULL, integrity TEXT NOT NULL, state_json TEXT NOT NULL);").map_err(|e| e.to_string())?;
     connection.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, ?1)", params![timestamp()]).map_err(|e| e.to_string())?;
     connection.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, ?1)", params![timestamp()]).map_err(|e| e.to_string())?;
@@ -407,10 +519,28 @@ fn replace_manuscript_snapshot(store: &mut Store, snapshot: &ManuscriptVersionSn
 fn compose(store: &Store, chapter_id: &str) -> Result<Document, String> { let current = chapter(store, chapter_id)?; let scenes = active_scenes(store, chapter_id, &current.active_scene_set_id); let mut blocks = vec![]; for (index, scene) in scenes.iter().enumerate() { if index > 0 { blocks.push(DocumentBlock { id: id("scene-break"), kind: "scene-break".into(), heading_level: None, alignment: None, runs: vec![TextRun { text: String::new(), marks: vec![] }] }); } let record = document_record(store, &scene.document_id)?; let revision = record.revisions.last().ok_or_else(|| "Document has no revision".to_string())?; blocks.extend(revision.document.blocks.clone()); } Ok(Document { format_version: DOCUMENT_FORMAT_VERSION, blocks }) }
 
 #[tauri::command]
-fn create_project(directory: String, name: String, app: State<'_, Mutex<AppState>>) -> Result<Project, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let root = PathBuf::from(&directory); let _ = database_for(&root)?; state.root = Some(root); let project = Project { id: id("project"), name, directory, schema_version: 5, created_at: timestamp(), updated_at: timestamp() };  state.store = Store::default(); state.store.project = Some(project.clone()); status(&mut state, "saved", "Project created offline"); state.persist()?; Ok(project) }
+fn create_project(directory: String, name: String, app: State<'_, Mutex<AppState>>) -> Result<Project, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let root = PathBuf::from(directory.trim()); let directory = normalized_project_directory(&root)?; let _ = database_for(&root, true)?; state.root = Some(root); let project = Project { id: id("project"), name, directory, schema_version: 5, created_at: timestamp(), updated_at: timestamp() };  state.store = Store::default(); state.store.project = Some(project.clone()); status(&mut state, "saved", "Project created offline"); state.persist()?; Ok(project) }
 
 #[tauri::command]
-fn open_project(directory: String, app: State<'_, Mutex<AppState>>) -> Result<Project, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let root = PathBuf::from(&directory); let db = database_for(&root)?; state.store = load_store(&db)?; state.root = Some(root); if let Some(project) = state.store.project.as_mut() { project.schema_version = project.schema_version.max(5); } for canvas in &mut state.store.canvases { if canvas.engine.is_empty() { canvas.engine = default_canvas_engine(); } } let note_ids: std::collections::HashSet<String> = state.store.markdown_notes.iter().map(|note| note.id.clone()).collect(); state.store.worldbuilding_items.clear(); state.store.relationships.clear(); state.store.document_links.clear(); state.store.canvas_nodes.retain(|node| note_ids.contains(&node.entity_id)); state.store.canvas_edges.clear(); let project = state.store.project.clone().ok_or_else(|| "Project metadata is missing".to_string())?; status(&mut state, "saved", "Project opened offline"); state.persist()?; Ok(project) }
+fn open_project(directory: String, app: State<'_, Mutex<AppState>>) -> Result<Project, String> {
+    let mut state = app.lock().map_err(|_| "Project lock poisoned")?;
+    let root = PathBuf::from(directory.trim());
+    validate_project_root(&root)?;
+    ensure_existing_directory(&root, "project directory")?;
+    let db_path = root.join(".weave").join("project.db");
+    ensure_safe_file(&db_path, "project database")?;
+    let db = database_for(&root, false)?;
+    let mut store = load_store(&db)?;
+    if let Some(project) = store.project.as_mut() { project.schema_version = project.schema_version.max(5); }
+    for canvas in &mut store.canvases { if canvas.engine.is_empty() { canvas.engine = default_canvas_engine(); } }
+    let note_ids: std::collections::HashSet<String> = store.markdown_notes.iter().map(|note| note.id.clone()).collect();
+    store.worldbuilding_items.clear(); store.relationships.clear(); store.document_links.clear();
+    store.canvas_nodes.retain(|node| note_ids.contains(&node.entity_id)); store.canvas_edges.clear();
+    let project = store.project.clone().ok_or_else(|| "Project metadata is missing".to_string())?;
+    if normalized_project_directory(Path::new(&project.directory))? != normalized_project_directory(&root)? { return Err("Project metadata does not match the selected directory".into()); }
+    state.store = store; state.root = Some(root);
+    status(&mut state, "saved", "Project opened offline"); state.persist()?; Ok(project)
+}
 #[tauri::command]
 fn get_project(app: State<'_, Mutex<AppState>>) -> Result<Project, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; state.store.project.clone().ok_or_else(|| "No project is open".into()) }
 #[tauri::command]
@@ -692,7 +822,7 @@ fn set_daily_word_target(target: i64, app: State<'_, Mutex<AppState>>) -> Result
 #[tauri::command]
 fn integrity_check(app: State<'_, Mutex<AppState>>) -> Result<IntegrityReport, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; status(&mut state, "integrity-check", "Checking project integrity…"); let db = state.db_path()?; let connection = Connection::open(db).map_err(|e| e.to_string())?; let value: String = connection.query_row("PRAGMA integrity_check", [], |row| row.get(0)).map_err(|e| e.to_string())?; let checked_at = timestamp(); let report = if value != "ok" { IntegrityReport { ok: false, message: format!("SQLite integrity check: {value}"), checked_at } } else if let Err(message) = validate_store(&state.store) { IntegrityReport { ok: false, message, checked_at } } else { IntegrityReport { ok: true, message: "Integrity check passed".into(), checked_at } }; status(&mut state, if report.ok { "saved" } else { "failed" }, &report.message); state.persist()?; Ok(report) }
 #[tauri::command]
-fn capture_backup(state: &mut AppState) -> Result<BackupRecord, String> { let db = state.db_path()?; let backup_id = id("backup"); let path = state.root.as_ref().ok_or_else(|| "No project is open".to_string())?.join(".weave").join("backups").join(format!("{backup_id}.db")); let created_at = timestamp(); let value = BackupRecord { id: backup_id.clone(), path: path.to_string_lossy().into_owned(), created_at: created_at.clone(), integrity: "ok".into() }; state.store.backups.push(value.clone()); status(state, "backup", "Backup captured"); state.persist()?; let checkpoint = Connection::open(&db).map_err(|e| e.to_string())?; checkpoint.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").map_err(|e| e.to_string())?; fs::copy(&db, &path).map_err(|e| e.to_string())?; let connection = Connection::open(&db).map_err(|e| e.to_string())?; let json = serde_json::to_string(&state.store).map_err(|e| e.to_string())?; connection.execute("INSERT OR REPLACE INTO backups(id, path, created_at, integrity, state_json) VALUES (?1, ?2, ?3, ?4, ?5)", params![&backup_id, &value.path, &created_at, "ok", &json]).map_err(|e| e.to_string())?; Ok(value) }
+fn capture_backup(state: &mut AppState) -> Result<BackupRecord, String> { let db = state.db_path()?; let backup_id = id("backup"); let backups = db.parent().ok_or_else(|| "Project database has no parent directory".to_string())?.join("backups"); ensure_existing_directory(&backups, "project backups directory")?; let path = backups.join(format!("{backup_id}.db")); ensure_safe_write_target(&path, "backup file")?; let created_at = timestamp(); let value = BackupRecord { id: backup_id.clone(), path: path.to_string_lossy().into_owned(), created_at: created_at.clone(), integrity: "ok".into() }; state.store.backups.push(value.clone()); status(state, "backup", "Backup captured"); state.persist()?; let checkpoint = Connection::open(&db).map_err(|e| e.to_string())?; checkpoint.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").map_err(|e| e.to_string())?; ensure_safe_write_target(&path, "backup file")?; fs::copy(&db, &path).map_err(|e| e.to_string())?; let connection = Connection::open(&db).map_err(|e| e.to_string())?; let json = serde_json::to_string(&state.store).map_err(|e| e.to_string())?; connection.execute("INSERT OR REPLACE INTO backups(id, path, created_at, integrity, state_json) VALUES (?1, ?2, ?3, ?4, ?5)", params![&backup_id, &value.path, &created_at, "ok", &json]).map_err(|e| e.to_string())?; Ok(value) }
 #[tauri::command]
 fn create_backup(app: State<'_, Mutex<AppState>>) -> Result<BackupRecord, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; capture_backup(&mut state) }
 #[tauri::command]
@@ -702,7 +832,7 @@ fn get_status(app: State<'_, Mutex<AppState>>) -> Result<OperationStatus, String
 #[tauri::command]
 fn project_snapshot(app: State<'_, Mutex<AppState>>) -> Result<ProjectSnapshot, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let project = state.store.project.clone().ok_or_else(|| "No project is open".to_string())?; Ok(ProjectSnapshot { project, stories: state.store.stories.clone(), chapters: state.store.chapters.clone(), scene_sets: state.store.scene_sets.clone(), scenes: state.store.scenes.clone(), continuous_drafts: state.store.drafts.clone(), markdown_notes: state.store.markdown_notes.clone(), note_links: state.store.note_links.clone(), canvases: state.store.canvases.clone(), backups: state.store.backups.clone(), style_profile: state.store.style_profile.clone(), writing_stats: make_writing_stats(&state.store), writing_activity: make_writing_activity(&state.store, 365), manuscript_versions: manuscript_version_summaries(&state.store), status: state.store.status.clone() }) }
 #[tauri::command]
-fn write_export(filename: String, bytes: Vec<u8>, app: State<'_, Mutex<AppState>>) -> Result<String, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let root = state.root.as_ref().ok_or_else(|| "No project is open".to_string())?; let exports = root.join(".weave").join("exports"); fs::create_dir_all(&exports).map_err(|e| e.to_string())?; let safe = Path::new(&filename).file_name().ok_or_else(|| "Invalid export filename".to_string())?; let path = exports.join(safe); fs::write(&path, bytes).map_err(|e| e.to_string())?; Ok(path.to_string_lossy().into_owned()) }
+fn write_export(filename: String, bytes: Vec<u8>, app: State<'_, Mutex<AppState>>) -> Result<String, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let root = state.root.as_ref().ok_or_else(|| "No project is open".to_string())?; let weave = root.join(".weave"); ensure_existing_directory(&weave, ".weave directory")?; let exports = weave.join("exports"); ensure_directory_chain(&exports)?; let safe = Path::new(&filename).file_name().filter(|value| *value != "." && *value != "..").ok_or_else(|| "Invalid export filename".to_string())?; let path = exports.join(safe); ensure_safe_write_target(&path, "export file")?; fs::write(&path, bytes).map_err(|e| e.to_string())?; Ok(path.to_string_lossy().into_owned()) }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() { tauri::Builder::default().manage(Mutex::new(AppState::default())).invoke_handler(tauri::generate_handler![create_project, open_project, get_project, create_story, create_chapter, create_scene, rename_story, rename_chapter, delete_story, delete_chapter, delete_scene, list_stories, list_chapters, list_scene_sets, list_scenes, rename_scene, reorder_scene, create_markdown_note, update_markdown_note, delete_markdown_note, list_markdown_notes, search_markdown_notes, list_note_links, repair_note_link, create_canvas, update_canvas, delete_canvas, list_canvases, canvas_projection, save_excalidraw_scene, add_canvas_node, remove_canvas_node, save_canvas_layout, get_document, get_revision, get_style_profile, update_style_profile, writing_stats, writing_activity, save_manuscript_version, list_manuscript_versions, get_manuscript_version, compare_manuscript_versions, restore_manuscript_version, set_daily_word_target, enter_continuous_draft, get_continuous_draft, keep_continuous_separate, automatically_split_continuous, compose_chapter, integrity_check, create_backup, recover_from_backup, get_status, project_snapshot, write_export]).run(tauri::generate_context!()).expect("error while running Weave"); }
@@ -728,6 +858,36 @@ mod tests {
     fn duplicate_restore_ids_are_rejected() {
         let result = ensure_unique_ids(vec!["story-1".to_string(), "story-1".to_string()].into_iter(), "story");
         assert_eq!(result.unwrap_err(), "Duplicate story story-1");
+    }
+
+    #[test]
+    fn normalizes_project_directory_without_accepting_traversal() {
+        assert_eq!(normalized_project_directory(Path::new("/tmp//weave-project")).unwrap(), "/tmp/weave-project");
+        assert!(normalized_project_directory(Path::new("/tmp/weave-project/../other")).is_err());
+    }
+
+    #[test]
+    fn creating_a_database_twice_is_rejected() {
+        let root = std::env::temp_dir().join(format!("weave-test-{}", Uuid::new_v4()));
+        database_for(&root, true).unwrap();
+        let error = database_for(&root, true).unwrap_err();
+        assert!(error.contains("already exists"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlinked_weave_directory() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!("weave-test-{}", Uuid::new_v4()));
+        let outside = std::env::temp_dir().join(format!("weave-outside-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, root.join(".weave")).unwrap();
+        let error = database_for(&root, true).unwrap_err();
+        assert!(error.contains("symlink"));
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(outside);
     }
 
     #[test]

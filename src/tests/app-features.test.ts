@@ -24,4 +24,11 @@ describe('writing navigation and motivation surfaces', () => {
     expect(styles).toContain('.focus-mode .topbar');
     expect(styles).toContain('.toast');
   });
+
+  it('reopens metadata-only recent projects in the web fallback', () => {
+    const app = readFileSync(join(process.cwd(), 'src/app/App.tsx'), 'utf8');
+    expect(app).toContain('const project = !isDesktop && recentName');
+    expect(app).toContain('repository.createProject(validatedDirectory, recentName)');
+    expect(app).toContain('openProjectAt(project.directory, project.name)');
+  });
 });
