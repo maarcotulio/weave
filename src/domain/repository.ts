@@ -9,6 +9,7 @@ import {
 } from './document';
 import { composeChapter, splitByExplicitMarkers } from './scenes';
 import { calculateProjectWordCount, documentMapFromRecords, localCalendarDate } from './goals';
+import { calculateWritingAnalytics } from './writing-analytics';
 import { cloneManuscriptVersionSnapshot, compareManuscriptVersionDetails, normalizeManuscriptVersionDetail, revisionRecord, validateManuscriptVersionSnapshot } from './manuscript-versions';
 import {
   DEFAULT_EDITOR_STYLE,
@@ -749,18 +750,20 @@ export class InMemoryProjectRepository implements ProjectRepository {
 
   async getWritingStats(): Promise<WritingStats> {
     const date = localCalendarDate();
+    const activity = Object.entries(this.state.writingGoals?.dailyWordCounts ?? {}).map(([entryDate, words]) => ({ date: entryDate, words }));
     return {
       date,
       dailyTarget: this.state.writingGoals?.dailyTarget ?? 500,
-      dailyWords: this.state.writingGoals?.dailyWordCounts?.[date] ?? 0,
-      projectWords: this.currentProjectWordCount()
+      dailyWords: Math.max(0, this.state.writingGoals?.dailyWordCounts?.[date] ?? 0),
+      projectWords: this.currentProjectWordCount(),
+      ...calculateWritingAnalytics(activity, date)
     };
   }
 
   async getWritingActivity(days = 365): Promise<WritingActivity[]> {
     const limit = Math.max(1, Math.trunc(days));
     return Object.entries(this.state.writingGoals?.dailyWordCounts ?? {})
-      .map(([date, words]) => ({ date, words: Math.max(0, words) }))
+      .map(([date, words]) => ({ date, words: Math.max(0, words ?? 0) }))
       .sort((left, right) => left.date.localeCompare(right.date))
       .slice(-limit)
       .map((entry) => deepClone(entry));
@@ -1010,6 +1013,7 @@ export class InMemoryProjectRepository implements ProjectRepository {
     if (!delta) return;
     const date = localCalendarDate();
     const goals = this.state.writingGoals ?? { dailyTarget: 500, dailyWordCounts: {} };
+    goals.dailyWordCounts ??= {};
     goals.dailyWordCounts[date] = Math.max(0, (goals.dailyWordCounts[date] ?? 0) + delta);
     this.state.writingGoals = goals;
   }

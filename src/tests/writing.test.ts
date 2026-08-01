@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AutosaveController } from '../domain/autosave';
 import { blockText, documentFromText } from '../domain/document';
 import { countDocumentWords, localCalendarDate } from '../domain/goals';
+import { calculateWritingAnalytics, normalizeWritingActivity } from '../domain/writing-analytics';
 import { PAGE_LAYOUT, canonicalOffsetToPage, effectiveTextMargins, mergePaginatedDocument, pageDimensions, pageOffsetToCanonical, pageTextHeight, paginateDocument, paginateDocumentWithSources, type PaginatedBlock } from '../domain/pagination';
 import { InMemoryProjectRepository } from '../domain/repository';
 import { DEFAULT_EDITOR_STYLE, DEFAULT_TEXT_MARGINS, type StructuredDocument } from '../domain/types';
@@ -20,6 +21,28 @@ async function fixture() {
   await repository.createScene(chapter.id, 'Second', documentFromText('three'));
   return { repository, story, chapter, first };
 }
+
+describe('writing analytics', () => {
+  it('calculates sessions, streaks, and daily pace from unique local dates', () => {
+    const activity = [
+      { date: '2025-01-01', words: 100 },
+      { date: '2025-01-02', words: 200 },
+      { date: '2025-01-02', words: 200 },
+      { date: '2025-01-04', words: 300 }
+    ];
+    expect(normalizeWritingActivity(activity)).toEqual([
+      { date: '2025-01-01', words: 100 },
+      { date: '2025-01-02', words: 200 },
+      { date: '2025-01-04', words: 300 }
+    ]);
+    expect(calculateWritingAnalytics(activity, '2025-01-04')).toEqual({ sessions: 3, currentStreak: 1, longestStreak: 2, averageWordsPerDay: 200 });
+  });
+
+  it('has explicit empty and non-today streak states', () => {
+    expect(calculateWritingAnalytics([], '2025-01-04')).toEqual({ sessions: 0, currentStreak: 0, longestStreak: 0, averageWordsPerDay: 0 });
+    expect(calculateWritingAnalytics([{ date: '2025-01-03', words: 100 }], '2025-01-04').currentStreak).toBe(0);
+  });
+});
 
 describe('writing style and goals', () => {
   it('keeps style presentation separate and counts only the active chapter source', async () => {
@@ -159,6 +182,13 @@ describe('writing style and goals', () => {
     await repository.saveDocument(first.documentId, documentFromText('one two three four'), head.revision);
     expect((await repository.getWritingStats()).dailyTarget).toBe(750);
     expect((await repository.getWritingStats()).dailyWords).toBe(2);
+    expect((await repository.getWritingStats()).sessions).toBe(1);
+    expect((await repository.getWritingStats()).currentStreak).toBe(1);
+    expect((await repository.getWritingStats()).averageWordsPerDay).toBe(2);
+    const duplicateHead = await repository.getDocument(first.documentId);
+    await repository.saveDocument(first.documentId, documentFromText('one two three four'), duplicateHead.revision);
+    expect((await repository.getWritingStats()).dailyWords).toBe(2);
+    expect((await repository.getWritingStats()).sessions).toBe(1);
     expect((await repository.getWritingActivity()).at(-1)?.words).toBe(2);
     expect(localCalendarDate()).toBe('2025-01-02');
     vi.setSystemTime(new Date(2025, 0, 3, 0, 1));

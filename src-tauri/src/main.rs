@@ -1,4 +1,4 @@
-use chrono::{Local, Utc};
+use chrono::{Duration, Local, NaiveDate, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::{Path, PathBuf}, sync::Mutex};
@@ -139,13 +139,13 @@ struct TextMargins { top: f64, right: f64, bottom: f64, left: f64 }
 struct EditorStyleProfile { font_family: String, font_size_pt: f64, line_spacing: String, #[serde(default = "default_page_size")] page_size: String, #[serde(default = "default_text_margins")] text_margins: TextMargins }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct WritingGoals { daily_target: i64, daily_word_counts: std::collections::HashMap<String, i64> }
+struct WritingGoals { daily_target: i64, #[serde(default)] daily_word_counts: std::collections::HashMap<String, i64> }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WritingActivity { date: String, words: i64 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WritingStats { date: String, daily_target: i64, daily_words: i64, project_words: i64 }
+struct WritingStats { date: String, daily_target: i64, daily_words: i64, project_words: i64, sessions: i64, current_streak: i64, longest_streak: i64, average_words_per_day: i64 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Store {
@@ -280,7 +280,37 @@ fn project_word_count(store: &Store) -> i64 {
     }).sum()
 }
 fn local_date() -> String { Local::now().format("%Y-%m-%d").to_string() }
-fn make_writing_stats(store: &Store) -> WritingStats { let date = local_date(); WritingStats { date: date.clone(), daily_target: store.writing_goals.daily_target, daily_words: *store.writing_goals.daily_word_counts.get(&date).unwrap_or(&0), project_words: project_word_count(store) } }
+fn valid_writing_date(value: &str) -> Option<NaiveDate> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' { return None; }
+    if !bytes.iter().enumerate().all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit()) { return None; }
+    // JavaScript's Date(year, ...) treats years 0..=99 as 1900..=1999; keep
+    // the Rust adapter on the same date set as the domain's calendar check.
+    let year = value[..4].parse::<i32>().ok()?;
+    if year < 100 { return None; }
+    let date = NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()?;
+    (date.format("%Y-%m-%d").to_string() == value).then_some(date)
+}
+
+fn writing_metrics(store: &Store, today: &str) -> (i64, i64, i64, i64) {
+    let valid_entries: Vec<(NaiveDate, i64)> = store.writing_goals.daily_word_counts.iter()
+        .filter_map(|(date, words)| valid_writing_date(date).map(|date| (date, (*words).max(0))))
+        .collect();
+    let mut dates: Vec<NaiveDate> = valid_entries.iter()
+        .filter(|(_, words)| *words > 0)
+        .map(|(date, _)| *date)
+        .collect();
+    dates.sort(); dates.dedup();
+    if dates.is_empty() { return (0, 0, 0, 0); }
+    let mut longest = 1_i64; let mut run = 1_i64;
+    for pair in dates.windows(2) { if pair[1] - pair[0] == Duration::days(1) { run += 1; } else { run = 1; } longest = longest.max(run); }
+    let today_date = valid_writing_date(today).unwrap_or_else(|| Local::now().date_naive());
+    let mut current = 0_i64;
+    if dates.last() == Some(&today_date) { current = 1; for pair in dates.windows(2).rev() { if pair[1] - pair[0] != Duration::days(1) { break; } current += 1; } }
+    let total: i64 = valid_entries.iter().map(|(_, words)| *words).sum();
+    (dates.len() as i64, current, longest, (total as f64 / dates.len() as f64).round() as i64)
+}
+fn make_writing_stats(store: &Store) -> WritingStats { let date = local_date(); let (sessions, current_streak, longest_streak, average_words_per_day) = writing_metrics(store, &date); WritingStats { date: date.clone(), daily_target: store.writing_goals.daily_target, daily_words: (*store.writing_goals.daily_word_counts.get(&date).unwrap_or(&0)).max(0), project_words: project_word_count(store), sessions, current_streak, longest_streak, average_words_per_day } }
 fn make_writing_activity(store: &Store, days: usize) -> Vec<WritingActivity> {
     let mut values: Vec<WritingActivity> = store.writing_goals.daily_word_counts.iter().map(|(date, words)| WritingActivity { date: date.clone(), words: (*words).max(0) }).collect();
     values.sort_by(|left, right| left.date.cmp(&right.date));
@@ -741,5 +771,16 @@ mod tests {
         assert_eq!(ordered.iter().map(|scene| scene.id.as_str()).collect::<Vec<_>>(), vec!["third", "second", "first"]);
         assert_eq!(scenes.iter().filter(|scene| scene.scene_set_id == "set").map(|scene| scene.position).collect::<Vec<_>>(), vec![2, 1, 0]);
         assert_eq!(scenes.iter().find(|scene| scene.id == "other-set").unwrap().position, 0);
+    }
+
+    #[test]
+    fn writing_metrics_ignores_malformed_activity_in_average() {
+        let mut store = Store::default();
+        store.writing_goals.daily_word_counts.insert("2025-01-01".into(), 100);
+        store.writing_goals.daily_word_counts.insert("2025-02-30".into(), 1_000);
+        store.writing_goals.daily_word_counts.insert("2025-1-01".into(), 2_000);
+        store.writing_goals.daily_word_counts.insert("legacy-date".into(), 3_000);
+
+        assert_eq!(writing_metrics(&store, "2025-01-01"), (1, 1, 1, 100));
     }
 }

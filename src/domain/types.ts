@@ -232,10 +232,20 @@ export interface WritingStats {
   dailyTarget: number;
   dailyWords: number;
   projectWords: number;
+  /** Number of local calendar days with a positive writing delta. */
+  sessions: number;
+  /** Consecutive active calendar days ending today; zero when today is empty. */
+  currentStreak: number;
+  /** Longest consecutive run of active calendar days. */
+  longestStreak: number;
+  /** Average words on an active writing day, rounded to the nearest word. */
+  averageWordsPerDay: number;
 }
 
 export interface WritingActivity {
+  /** Local calendar date (YYYY-MM-DD), never a UTC-derived date. */
   date: string;
+  /** Net manuscript words recorded for the date; autosave retries are not added twice. */
   words: number;
 }
 
