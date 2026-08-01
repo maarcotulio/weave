@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { Plus } from 'lucide-react';
 import { AutosaveController, type AutosaveStatus } from '../domain/autosave';
 import { blockText, documentFromText, replaceBlockText, toggleMarks } from '../domain/document';
-import { DEFAULT_EDITOR_STYLE, FONT_FAMILY_OPTIONS, FONT_SIZE_OPTIONS, LINE_SPACING_OPTIONS, PAGE_SIZE_OPTIONS, type CanvasEngine, type Chapter, type ContinuousDraft, type EditorStyleProfile, type ExportFormat, type ProjectSnapshot, type Scene, type SemanticMark, type StructuredDocument, type WritingStats } from '../domain/types';
+import { DEFAULT_EDITOR_STYLE, FONT_FAMILY_OPTIONS, FONT_SIZE_OPTIONS, LINE_SPACING_OPTIONS, PAGE_SIZE_OPTIONS, type CanvasEngine, type Chapter, type ContinuousDraft, type EditorStyleProfile, type ExportFormat, type MarkdownNote, type ProjectSnapshot, type Scene, type SemanticMark, type StructuredDocument, type WritingStats } from '../domain/types';
 import { canonicalOffsetToPage, mergePaginatedDocument, pageDimensions, pageOffsetToCanonical, paginateDocumentWithSources, type PaginatedBlock, type PaginatedPage } from '../domain/pagination';
 import { InMemoryProjectRepository, type DocumentHead, type ProjectRepository } from '../domain/repository';
 import { exportCapturedRevision } from '../export/editorial';
@@ -13,6 +13,9 @@ import { applyTheme, persistTheme, readStoredTheme, toggleTheme, type Theme } fr
 const isDesktop = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 const formats: ExportFormat[] = ['pdf', 'docx', 'markdown', 'text'];
 const lineHeight: Record<EditorStyleProfile['lineSpacing'], number> = { single: 1, '1.15': 1.15, '1.5': 1.5, double: 2 };
+type NoteActionState =
+  | { kind: 'rename'; noteId: string; title: string }
+  | { kind: 'delete'; noteId: string; title: string; phase: 'confirm' | 'references'; referenceMessage?: string };
 
 function initialDocument(): StructuredDocument { return documentFromText(''); }
 
@@ -143,6 +146,38 @@ function CanvasChoiceDialog({ busy, onCancel, onSubmit }: { busy: boolean; onCan
   </Modal>;
 }
 
+function NoteRenameDialog({ initialTitle, busy, onCancel, onSubmit }: { initialTitle: string; busy: boolean; onCancel: () => void; onSubmit: (title: string) => void }) {
+  const [value, setValue] = useState(initialTitle);
+  useEffect(() => setValue(initialTitle), [initialTitle]);
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !busy) { event.preventDefault(); onCancel(); } };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [busy, onCancel]);
+  return <div className="modal-backdrop"><div className="modal" role="dialog" aria-modal="true" aria-busy={busy} aria-labelledby="rename-note-dialog-title" aria-describedby="rename-note-dialog-description">
+    <div className="modal-heading"><p className="eyebrow">NOTE</p><h2 id="rename-note-dialog-title">Rename note</h2><button type="button" className="modal-close" aria-label="Close dialog" disabled={busy} onClick={onCancel}>×</button></div>
+    <p id="rename-note-dialog-description">Choose a new title for “{initialTitle}”. Cancel or Escape leaves the note unchanged.</p>
+    <form onSubmit={(event) => { event.preventDefault(); if (value.trim()) onSubmit(value.trim()); }}>
+      <label className="modal-field">Note name<input autoFocus required value={value} onChange={(event) => setValue(event.target.value)} /></label>
+      <div className="modal-actions"><button type="button" className="text-button" disabled={busy} onClick={onCancel}>Cancel</button><button type="submit" className="primary-button" disabled={busy || !value.trim()}>Rename note</button></div>
+    </form>
+  </div></div>;
+}
+
+function NoteDeleteDialog({ title, phase, referenceMessage, busy, onCancel, onConfirm }: { title: string; phase: 'confirm' | 'references'; referenceMessage?: string; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
+  const references = phase === 'references';
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !busy) { event.preventDefault(); onCancel(); } };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [busy, onCancel]);
+  return <div className="modal-backdrop"><div className="modal" role="dialog" aria-modal="true" aria-busy={busy} aria-labelledby="delete-note-dialog-title" aria-describedby="delete-note-dialog-description">
+    <div className="modal-heading"><p className="eyebrow">NOTE</p><h2 id="delete-note-dialog-title">{references ? 'References found' : 'Delete note'}</h2><button type="button" className="modal-close" aria-label="Close dialog" disabled={busy} onClick={onCancel}>×</button></div>
+    {references ? <><p id="delete-note-dialog-description"><strong>We could not delete “{title}” because it is still referenced.</strong> Deleting it with remove-references will remove its canvas placements and leave incoming Markdown links unresolved for repair. This cannot be undone.</p>{referenceMessage && <p className="modal-help">{referenceMessage}</p>}</> : <p id="delete-note-dialog-description">Are you sure you want to delete “{title}”? This permanently removes the note and its canvas placements. Cancel or Escape leaves the note unchanged.</p>}
+    <div className="modal-actions"><button type="button" className="text-button" disabled={busy} onClick={onCancel}>Cancel</button><button type="button" className="danger-button" disabled={busy} onClick={onConfirm}>{references ? 'Delete and remove references' : 'Delete note'}</button></div>
+  </div></div>;
+}
+
 export default function App() {
   const repository = useMemo<ProjectRepository>(() => isDesktop ? new TauriProjectRepository() : new InMemoryProjectRepository(), []);
   const [theme, setTheme] = useState<Theme>(() => readStoredTheme());
@@ -162,6 +197,7 @@ export default function App() {
   const [showReturnChoices, setShowReturnChoices] = useState(false);
   const [formDialog, setFormDialog] = useState<FormDialogConfig>();
   const [canvasDialog, setCanvasDialog] = useState<{ storyId: string }>();
+  const [noteAction, setNoteAction] = useState<NoteActionState>();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState('');
@@ -173,6 +209,7 @@ export default function App() {
   const latestSaveRef = useRef<() => Promise<void>>(async () => undefined);
   const canonicalSelectionRef = useRef<CanonicalSelection>();
   const restoreFocusRef = useRef(false);
+  const noteFlushRef = useRef<{ noteId: string; flush: () => Promise<boolean> }>();
   documentHeadRef.current = documentHead;
   editorDocumentRef.current = editorDocument;
 
@@ -238,6 +275,16 @@ export default function App() {
   }, [autosave]);
 
   const run = async (operation: () => Promise<void>) => { setBusy(true); setLocalError(''); try { await operation(); } catch (error) { setLocalError(error instanceof Error ? error.message : String(error)); } finally { setBusy(false); } };
+  const registerNoteFlush = useCallback((noteId: string, flush?: () => Promise<boolean>) => {
+    if (flush) noteFlushRef.current = { noteId, flush };
+    else if (noteFlushRef.current?.noteId === noteId) noteFlushRef.current = undefined;
+  }, []);
+  const flushNoteBeforeAction = async (noteId: string) => {
+    const registered = noteFlushRef.current;
+    if (!registered || registered.noteId !== noteId) return true;
+    return registered.flush();
+  };
+  const latestMarkdownNote = async (noteId: string): Promise<MarkdownNote | undefined> => (await repository.listMarkdownNotes()).find((note) => note.id === noteId);
   const submitFormDialog = (values: Record<string, string>) => void run(async () => { const config = formDialog; if (!config) return; await config.onSubmit(values); setFormDialog(undefined); });
 
   const saveCurrentDocument = useCallback(async () => {
@@ -338,6 +385,38 @@ export default function App() {
   const submitCanvasChoice = (title: string, engine: CanvasEngine) => void run(async () => { const choice = canvasDialog; if (!choice) return; const canvas = await repository.createCanvas(choice.storyId, title, engine); setCanvasDialog(undefined); await refresh(); openWorldbuildingTab({ kind: 'canvas', id: canvas.id }); });
   const openWorldbuildingTab = (tab: WorldbuildingTab) => { const key = worldbuildingTabKey(tab); setWorldbuildingTabs((current) => current.some((candidate) => worldbuildingTabKey(candidate) === key) ? current : [...current, tab]); setActiveWorldbuildingTabKey(key); };
   const closeWorldbuildingTab = (key: string) => setWorldbuildingTabs((current) => { const index = current.findIndex((tab) => worldbuildingTabKey(tab) === key); const next = current.filter((tab) => worldbuildingTabKey(tab) !== key); setActiveWorldbuildingTabKey((active) => active === key ? (next[index] ? worldbuildingTabKey(next[index]) : next[index - 1] ? worldbuildingTabKey(next[index - 1]) : undefined) : active); return next; });
+  const requestRenameNote = (note: MarkdownNote) => setNoteAction({ kind: 'rename', noteId: note.id, title: note.title });
+  const requestDeleteNote = (note: MarkdownNote) => setNoteAction({ kind: 'delete', noteId: note.id, title: note.title, phase: 'confirm' });
+  const submitNoteRename = (nextTitle: string) => void run(async () => {
+    const action = noteAction;
+    if (!action || action.kind !== 'rename' || !nextTitle.trim()) return;
+    if (!await flushNoteBeforeAction(action.noteId)) return;
+    const note = await latestMarkdownNote(action.noteId);
+    if (!note) { setNoteAction(undefined); await refresh(); return; }
+    await repository.updateMarkdownNote(note.id, { title: nextTitle.trim(), markdown: note.markdown }, note.revision);
+    setNoteAction(undefined);
+    await refresh();
+  });
+  const confirmNoteDelete = (mode: 'reject' | 'remove-references') => void run(async () => {
+    const action = noteAction;
+    if (!action || action.kind !== 'delete') return;
+    if (!await flushNoteBeforeAction(action.noteId)) return;
+    const note = await latestMarkdownNote(action.noteId);
+    if (!note) { setNoteAction(undefined); closeWorldbuildingTab(worldbuildingTabKey({ kind: 'note', id: action.noteId })); await refresh(); return; }
+    try {
+      await repository.deleteMarkdownNote(note.id, note.revision, mode);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (mode === 'reject' && message.startsWith('Cannot delete')) {
+        setNoteAction({ kind: 'delete', noteId: note.id, title: note.title, phase: 'references', referenceMessage: message });
+        return;
+      }
+      throw error;
+    }
+    setNoteAction(undefined);
+    closeWorldbuildingTab(worldbuildingTabKey({ kind: 'note', id: note.id }));
+    await refresh();
+  });
 
   if (!snapshot) return <><main className="welcome"><div className="welcome-card"><div className="welcome-card-top"><div className="mark">W</div><ThemeControl theme={theme} onToggle={() => setTheme(toggleTheme)} /></div><p className="eyebrow">OFFLINE DESKTOP WRITING</p><h1>Make room for the story.</h1><p className="welcome-copy">Weave keeps your manuscript, revisions, SQLite database, and recovery files in a visible <code>.weave</code> project directory. No server. No network. No guesswork.</p><div className="welcome-actions"><button type="button" className="primary-button" onClick={createProject} disabled={busy}>Create project</button><button type="button" className="secondary-button" onClick={openProject} disabled={busy}>Open project</button></div>{localError && <p className="error-message">{localError}</p>}<p className="offline-note"><span className="status-dot" /> local-only · SQLite · revisioned</p></div></main>{formDialog && <FormDialog config={formDialog} busy={busy} onCancel={() => setFormDialog(undefined)} onSubmit={submitFormDialog} />}</>;
 
@@ -345,8 +424,8 @@ export default function App() {
   const activeScene = scenes.find((scene) => scene.id === selectedSceneId);
   return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
     <header className="topbar"><div className="brand-cluster"><button type="button" className="sidebar-toggle" aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-expanded={!sidebarCollapsed} onClick={() => setSidebarCollapsed((current) => !current)}>☰</button><div className="brand"><span className="brand-mark">W</span><span>Weave</span><span className="offline-pill">OFFLINE</span></div></div><div className="top-actions"><button type="button" onClick={checkIntegrity}>Integrity</button><button type="button" onClick={backup}>Backup</button><button type="button" onClick={doExport} disabled={busy || mode === 'compose'}>Export all</button><ThemeControl theme={theme} onToggle={() => setTheme(toggleTheme)} /><StatusBar status={autosaveStatus} />{autosaveStatus.state === 'error' && <button type="button" className="retry-button" onClick={retryAutosave}>Retry</button>}</div></header>
-    <aside className="sidebar"><nav className="workspace-sections" role="tablist" aria-label="Primary workspaces"><button type="button" role="tab" id="manuscript-workspace-tab" aria-controls="manuscript-workspace" aria-selected={workspaceMode === 'writing'} className={workspaceMode === 'writing' ? 'selected' : ''} onClick={() => void run(async () => { await autosave.flush(); setWorkspaceMode('writing'); })}>Manuscript</button><button type="button" role="tab" id="worldbuilding-workspace-tab" aria-controls="worldbuilding-workspace" aria-selected={workspaceMode === 'worldbuilding'} className={workspaceMode === 'worldbuilding' ? 'selected' : ''} onClick={() => void run(async () => { await autosave.flush(); setWorkspaceMode('worldbuilding'); })}>Worldbuilding</button></nav>{workspaceMode === 'writing' ? <><div className="sidebar-heading"><span>MANUSCRIPT</span><div className="sidebar-heading-actions"><button type="button" onClick={createProject} aria-label="New project">+</button><button type="button" onClick={() => setSidebarCollapsed(true)} aria-label="Collapse sidebar">‹</button></div></div>{snapshot.stories.map((story) => <div key={story.id} className="tree-group"><button type="button" className={`tree-item story ${selectedStoryId === story.id ? 'selected' : ''}`} onClick={() => void run(async () => { await autosave.flush(); setSelectedStoryId(story.id); })}>▾ <span>{story.title}</span></button>{snapshot.chapters.filter((chapter) => chapter.storyId === story.id).map((chapter) => <div key={chapter.id} className="chapter-group"><button type="button" className={`tree-item chapter ${selectedChapterId === chapter.id ? 'selected' : ''}`} onClick={() => void run(async () => { await autosave.flush(); setSelectedChapterId(chapter.id); setSelectedSceneId(undefined); })}>▾ <span>{chapter.title}</span></button>{selectedChapterId === chapter.id && scenes.map((scene) => <button type="button" key={scene.id} className={`tree-item scene ${selectedSceneId === scene.id && mode === 'scene' ? 'selected' : ''}`} onClick={() => selectScene(scene)}><span className="scene-index">{String(scene.position + 1).padStart(2, '0')}</span>{scene.title}</button>)}{selectedChapterId === chapter.id && <button type="button" className="add-scene" onClick={addScene}>+ New scene</button>}</div>)}</div>)}<button type="button" className="add-story" onClick={newStory}>+ New story</button><div className="sidebar-bottom"><button type="button" onClick={addChapter} disabled={!selectedStoryId}>+ Chapter</button><button type="button" onClick={openProject}>Open</button></div></> : <nav className="worldbuilding-sidebar" aria-label="Worldbuilding navigation"><p className="eyebrow">WORLDBUILDING</p><section className="worldbuilding-sidebar-group"><div className="worldbuilding-sidebar-heading"><h2>Notes</h2><button type="button" className="worldbuilding-create-icon" aria-label="Create new note" title="Create new note" onClick={createWorldbuildingNote}><Plus size={14} strokeWidth={2} aria-hidden="true" /></button></div>{snapshot.markdownNotes.map((note) => { const key = worldbuildingTabKey({ kind: 'note', id: note.id }); return <button type="button" key={note.id} className={activeWorldbuildingTabKey === key ? 'selected' : ''} aria-current={activeWorldbuildingTabKey === key ? 'page' : undefined} onClick={() => openWorldbuildingTab({ kind: 'note', id: note.id })}>{note.title}</button>; })}{snapshot.markdownNotes.length === 0 && <p>No notes yet.</p>}</section><section className="worldbuilding-sidebar-group"><div className="worldbuilding-sidebar-heading"><h2>Canvases</h2><button type="button" className="worldbuilding-create-icon" aria-label="Create new canvas" title="Create new canvas" onClick={createWorldbuildingCanvas}><Plus size={14} strokeWidth={2} aria-hidden="true" /></button></div>{snapshot.canvases.map((canvas) => { const key = worldbuildingTabKey({ kind: 'canvas', id: canvas.id }); return <button type="button" key={canvas.id} className={activeWorldbuildingTabKey === key ? 'selected' : ''} aria-current={activeWorldbuildingTabKey === key ? 'page' : undefined} onClick={() => openWorldbuildingTab({ kind: 'canvas', id: canvas.id })}>{canvas.title}</button>; })}{snapshot.canvases.length === 0 && <p>No canvases yet.</p>}</section><p className="worldbuilding-sidebar-note">Open tabs remain available when returning to Manuscript.</p></nav>}</aside>
-    {workspaceMode === 'worldbuilding' ? <WorldbuildingWorkspace repository={repository} snapshot={snapshot} tabs={worldbuildingTabs} activeTabKey={activeWorldbuildingTabKey} onOpenTab={openWorldbuildingTab} onActivateTab={setActiveWorldbuildingTabKey} onCloseTab={closeWorldbuildingTab} onCreateNote={createWorldbuildingNote} onCreateCanvas={createWorldbuildingCanvas} onRefresh={async () => { await refresh(); }} onReturnToManuscript={() => setWorkspaceMode('writing')} onError={setLocalError} /> : <main id="manuscript-workspace" role="tabpanel" aria-labelledby="manuscript-workspace-tab" className="workspace"><div className="workspace-head"><div><p className="eyebrow">{activeChapter?.title ?? 'Chapter'}</p><h1>{mode === 'continuous' ? 'Continuous draft' : mode === 'compose' ? 'Composed chapter' : activeScene?.title ?? 'Choose a scene'}</h1></div><div className="mode-switch"><button type="button" className={mode === 'scene' ? 'active' : ''} onClick={() => activeScene && selectScene(activeScene)}>Scenes</button><button type="button" className={mode === 'compose' ? 'active' : ''} onClick={compose}>Chapter view</button><button type="button" className={mode === 'continuous' ? 'active' : ''} onClick={openContinuous}>Continuous draft</button></div></div>
+    <aside className="sidebar"><nav className="workspace-sections" role="tablist" aria-label="Primary workspaces"><button type="button" role="tab" id="manuscript-workspace-tab" aria-controls="manuscript-workspace" aria-selected={workspaceMode === 'writing'} className={workspaceMode === 'writing' ? 'selected' : ''} onClick={() => void run(async () => { await autosave.flush(); setWorkspaceMode('writing'); })}>Manuscript</button><button type="button" role="tab" id="worldbuilding-workspace-tab" aria-controls="worldbuilding-workspace" aria-selected={workspaceMode === 'worldbuilding'} className={workspaceMode === 'worldbuilding' ? 'selected' : ''} onClick={() => void run(async () => { await autosave.flush(); setWorkspaceMode('worldbuilding'); })}>Worldbuilding</button></nav>{workspaceMode === 'writing' ? <><div className="sidebar-heading"><span>MANUSCRIPT</span><div className="sidebar-heading-actions"><button type="button" onClick={createProject} aria-label="New project">+</button><button type="button" onClick={() => setSidebarCollapsed(true)} aria-label="Collapse sidebar">‹</button></div></div>{snapshot.stories.map((story) => <div key={story.id} className="tree-group"><button type="button" className={`tree-item story ${selectedStoryId === story.id ? 'selected' : ''}`} onClick={() => void run(async () => { await autosave.flush(); setSelectedStoryId(story.id); })}>▾ <span>{story.title}</span></button>{snapshot.chapters.filter((chapter) => chapter.storyId === story.id).map((chapter) => <div key={chapter.id} className="chapter-group"><button type="button" className={`tree-item chapter ${selectedChapterId === chapter.id ? 'selected' : ''}`} onClick={() => void run(async () => { await autosave.flush(); setSelectedChapterId(chapter.id); setSelectedSceneId(undefined); })}>▾ <span>{chapter.title}</span></button>{selectedChapterId === chapter.id && scenes.map((scene) => <button type="button" key={scene.id} className={`tree-item scene ${selectedSceneId === scene.id && mode === 'scene' ? 'selected' : ''}`} onClick={() => selectScene(scene)}><span className="scene-index">{String(scene.position + 1).padStart(2, '0')}</span>{scene.title}</button>)}{selectedChapterId === chapter.id && <button type="button" className="add-scene" onClick={addScene}>+ New scene</button>}</div>)}</div>)}<button type="button" className="add-story" onClick={newStory}>+ New story</button><div className="sidebar-bottom"><button type="button" onClick={addChapter} disabled={!selectedStoryId}>+ Chapter</button><button type="button" onClick={openProject}>Open</button></div></> : <nav className="worldbuilding-sidebar" aria-label="Worldbuilding navigation"><p className="eyebrow">WORLDBUILDING</p><section className="worldbuilding-sidebar-group"><div className="worldbuilding-sidebar-heading"><h2>Notes</h2><button type="button" className="worldbuilding-create-icon" aria-label="Create new note" title="Create new note" onClick={createWorldbuildingNote}><Plus size={14} strokeWidth={2} aria-hidden="true" /></button></div>{snapshot.markdownNotes.map((note) => { const key = worldbuildingTabKey({ kind: 'note', id: note.id }); const selected = activeWorldbuildingTabKey === key; return <div className="worldbuilding-sidebar-note-row" key={note.id}><button type="button" className={`worldbuilding-sidebar-note-title ${selected ? 'selected' : ''}`} aria-current={selected ? 'page' : undefined} onClick={() => openWorldbuildingTab({ kind: 'note', id: note.id })}>{note.title}</button><div className="worldbuilding-sidebar-note-actions" aria-label={`${note.title} note actions`}><button type="button" className="worldbuilding-sidebar-note-action" aria-label={`Rename ${note.title}`} onClick={(event) => { event.stopPropagation(); requestRenameNote(note); }}>Rename</button><button type="button" className="worldbuilding-sidebar-note-action worldbuilding-sidebar-note-delete" aria-label={`Delete ${note.title}`} onClick={(event) => { event.stopPropagation(); requestDeleteNote(note); }}>Delete</button></div></div>; })}{snapshot.markdownNotes.length === 0 && <p>No notes yet.</p>}</section><section className="worldbuilding-sidebar-group"><div className="worldbuilding-sidebar-heading"><h2>Canvases</h2><button type="button" className="worldbuilding-create-icon" aria-label="Create new canvas" title="Create new canvas" onClick={createWorldbuildingCanvas}><Plus size={14} strokeWidth={2} aria-hidden="true" /></button></div>{snapshot.canvases.map((canvas) => { const key = worldbuildingTabKey({ kind: 'canvas', id: canvas.id }); return <button type="button" key={canvas.id} className={activeWorldbuildingTabKey === key ? 'selected' : ''} aria-current={activeWorldbuildingTabKey === key ? 'page' : undefined} onClick={() => openWorldbuildingTab({ kind: 'canvas', id: canvas.id })}>{canvas.title}</button>; })}{snapshot.canvases.length === 0 && <p>No canvases yet.</p>}</section><p className="worldbuilding-sidebar-note">Open tabs remain available when returning to Manuscript.</p></nav>}</aside>
+    {workspaceMode === 'worldbuilding' ? <WorldbuildingWorkspace repository={repository} snapshot={snapshot} tabs={worldbuildingTabs} activeTabKey={activeWorldbuildingTabKey} onOpenTab={openWorldbuildingTab} onActivateTab={setActiveWorldbuildingTabKey} onCloseTab={closeWorldbuildingTab} onCreateNote={createWorldbuildingNote} onCreateCanvas={createWorldbuildingCanvas} onRefresh={async () => { await refresh(); }} onRegisterNoteFlush={registerNoteFlush} onReturnToManuscript={() => setWorkspaceMode('writing')} onError={setLocalError} /> : <main id="manuscript-workspace" role="tabpanel" aria-labelledby="manuscript-workspace-tab" className="workspace"><div className="workspace-head"><div><p className="eyebrow">{activeChapter?.title ?? 'Chapter'}</p><h1>{mode === 'continuous' ? 'Continuous draft' : mode === 'compose' ? 'Composed chapter' : activeScene?.title ?? 'Choose a scene'}</h1></div><div className="mode-switch"><button type="button" className={mode === 'scene' ? 'active' : ''} onClick={() => activeScene && selectScene(activeScene)}>Scenes</button><button type="button" className={mode === 'compose' ? 'active' : ''} onClick={compose}>Chapter view</button><button type="button" className={mode === 'continuous' ? 'active' : ''} onClick={openContinuous}>Continuous draft</button></div></div>
       {localError && <div className="inline-error" role="alert">{localError}</div>}
       <GoalPanel stats={snapshot.writingStats} onSaveTarget={updateGoal} />
       <div className="page-stack" ref={pageStackRef} aria-label="Manuscript pages"><StyleControls profile={styleProfile} onChange={updateStyle} disabled={mode === 'compose'} />{pages.map((page, pageIndex) => <section className="paper-page" style={pageStyle} key={`${pageIndex}-${page.document.blocks[0]?.id ?? 'empty'}`}><div className="paper-meta"><span>{mode === 'compose' ? 'NON-DESTRUCTIVE COMPOSITION' : mode === 'continuous' ? 'SEPARATE REVISION · SOURCE SNAPSHOT PRESERVED' : 'SCENE DOCUMENT'}</span><span>{pageDimensions(styleProfile.pageSize).label} · Page {pageIndex + 1} of {pages.length}</span></div><Editor document={page.document} styleProfile={styleProfile} onChange={(value) => updatePage(pageIndex, value)} onSelectionChange={rememberSelection} readOnly={mode === 'compose'} /><div className="paper-footer"><span>{mode === 'compose' ? 'Scene documents remain the source.' : 'Structured document · changes save automatically'}</span>{documentHead && pageIndex === pages.length - 1 && <span>revision {documentHead.revision}</span>}</div></section>)}</div>
@@ -355,5 +434,7 @@ export default function App() {
     {showReturnChoices && <ChoiceDialog onSplit={split} onKeep={keepSeparate} onCancel={() => setShowReturnChoices(false)} busy={busy} />}
     {formDialog && <FormDialog config={formDialog} busy={busy} onCancel={() => setFormDialog(undefined)} onSubmit={submitFormDialog} />}
     {canvasDialog && <CanvasChoiceDialog busy={busy} onCancel={() => setCanvasDialog(undefined)} onSubmit={submitCanvasChoice} />}
+    {noteAction?.kind === 'rename' && <NoteRenameDialog initialTitle={noteAction.title} busy={busy} onCancel={() => setNoteAction(undefined)} onSubmit={submitNoteRename} />}
+    {noteAction?.kind === 'delete' && <NoteDeleteDialog title={noteAction.title} phase={noteAction.phase} referenceMessage={noteAction.referenceMessage} busy={busy} onCancel={() => setNoteAction(undefined)} onConfirm={() => confirmNoteDelete(noteAction.phase === 'references' ? 'remove-references' : 'reject')} />}
   </div>;
 }
