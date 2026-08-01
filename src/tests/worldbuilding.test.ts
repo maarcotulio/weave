@@ -118,6 +118,18 @@ describe('offline persistence and accessible workspace', () => {
     reopened.close();
   });
 
+  it('keeps Worldbuilding tab activation, close semantics, and close-control alignment intact', () => {
+    const component = readFileSync(join(process.cwd(), 'src/app/Worldbuilding.tsx'), 'utf8');
+    const styles = readFileSync(join(process.cwd(), 'src/app/styles.css'), 'utf8');
+    expect(component).toContain('role="tablist" aria-label="Open Worldbuilding tabs"');
+    expect(component).toContain('onClick={() => onActivate(key)}');
+    expect(component).toContain('aria-label={`Close ${labelFor(tab)} tab`}');
+    expect(component).toContain('onClick={() => onClose(key)}');
+    expect(styles).toContain('.world-tab-close { display: grid; place-items: center; width: 27px; padding: 0;');
+    expect(styles).toContain('.world-tab-close:hover { color: var(--accent-dark); background: var(--accent-wash); }');
+    expect(readFileSync(join(process.cwd(), 'src/app/base.css'), 'utf8')).toContain(':focus-visible');
+  });
+
   it('ships accessible workspace tabs, exact empty actions, and a note-only React Flow fallback', () => {
     const component = readFileSync(join(process.cwd(), 'src/app/Worldbuilding.tsx'), 'utf8');
     expect(component).toContain("from '@xyflow/react'");
