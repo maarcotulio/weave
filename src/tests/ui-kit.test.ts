@@ -6,7 +6,7 @@ describe('direct UI kit route', () => {
   it('recognizes /ui directly and renders the reference without project state', () => {
     const app = readFileSync(join(process.cwd(), 'src/app/App.tsx'), 'utf8');
     const kit = readFileSync(join(process.cwd(), 'src/app/UiKit.tsx'), 'utf8');
-    expect(app).toContain("type AppRoute = 'home' | 'manuscript' | 'worldbuilding' | 'settings' | 'ui'");
+    expect(app).toContain("type AppRoute = 'home' | 'manuscript' | 'outline' | 'worldbuilding' | 'settings' | 'ui'");
     expect(app).toContain("value === 'ui'");
     expect(app).toContain("if (route === 'ui') return <UiKit />;");
     expect(kit).toContain('aria-labelledby="ui-kit-title"');

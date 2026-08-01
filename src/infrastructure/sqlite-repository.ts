@@ -80,6 +80,7 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
   async deleteStory(storyId: string): Promise<void> { await super.deleteStory(storyId); this.persist(); }
   async deleteChapter(chapterId: string): Promise<void> { await super.deleteChapter(chapterId); this.persist(); }
   async deleteScene(sceneId: string): Promise<void> { await super.deleteScene(sceneId); this.persist(); }
+  async reorderChapter(chapterId: string, position: number): Promise<Chapter[]> { const value = await super.reorderChapter(chapterId, position); this.persist(); return value; }
   async reorderScene(sceneId: string, position: number): Promise<Scene[]> { const value = await super.reorderScene(sceneId, position); this.persist(); return value; }
   async createMarkdownNote(title: string, markdown?: string): Promise<MarkdownNote> { const value = await super.createMarkdownNote(title, markdown); this.persist(); return value; }
   async updateMarkdownNote(noteId: string, input: { title: string; markdown: string }, expectedRevision: number): Promise<MarkdownNote> { try { const value = await super.updateMarkdownNote(noteId, input, expectedRevision); this.persist(); return value; } catch (error) { this.persist(); throw error; } }

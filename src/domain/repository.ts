@@ -97,6 +97,7 @@ export interface ProjectRepository {
   deleteStory(storyId: string): Promise<void>;
   deleteChapter(chapterId: string): Promise<void>;
   deleteScene(sceneId: string): Promise<void>;
+  reorderChapter(chapterId: string, position: number): Promise<Chapter[]>;
   reorderScene(sceneId: string, position: number): Promise<Scene[]>;
   createMarkdownNote(title: string, markdown?: string): Promise<MarkdownNote>;
   updateMarkdownNote(noteId: string, input: { title: string; markdown: string }, expectedRevision: number): Promise<MarkdownNote>;
@@ -372,6 +373,20 @@ export class InMemoryProjectRepository implements ProjectRepository {
     this.state.chapters.filter((candidate) => candidate.storyId === chapter.storyId).forEach((candidate, position) => { candidate.position = position; });
     this.touchProject();
     this.state.status = { state: 'saved', message: `Chapter “${chapter.title}” and its scenes deleted`, at: now() };
+  }
+
+  async reorderChapter(chapterId: string, position: number): Promise<Chapter[]> {
+    const chapter = this.requireChapter(chapterId);
+    const siblings = this.state.chapters.filter((item) => item.storyId === chapter.storyId).sort((a, b) => a.position - b.position);
+    const from = siblings.findIndex((item) => item.id === chapterId);
+    if (from < 0) throw new Error('Chapter is not in its story');
+    const bounded = Math.max(0, Math.min(Math.trunc(position), siblings.length - 1));
+    const [moved] = siblings.splice(from, 1);
+    siblings.splice(bounded, 0, moved);
+    siblings.forEach((item, index) => { item.position = index; });
+    this.touchProject();
+    this.state.status = { state: 'saved', message: 'Chapter order saved', at: now() };
+    return deepClone(siblings);
   }
 
   async deleteScene(sceneId: string): Promise<void> {

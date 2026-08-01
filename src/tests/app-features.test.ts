@@ -8,7 +8,7 @@ describe('writing navigation and motivation surfaces', () => {
     const home = readFileSync(join(process.cwd(), 'src/app/Home.tsx'), 'utf8');
     const settings = readFileSync(join(process.cwd(), 'src/app/Settings.tsx'), 'utf8');
     const styles = readFileSync(join(process.cwd(), 'src/app/feature-pages.css'), 'utf8');
-    expect(app).toContain("type AppRoute = 'home' | 'manuscript' | 'worldbuilding' | 'settings'");
+    expect(app).toContain("type AppRoute = 'home' | 'manuscript' | 'outline' | 'worldbuilding' | 'settings'");
     expect(app).toContain('Daily goal reached');
     expect(app).toContain('Save version');
     expect(app).toContain('Why save versions?');
@@ -26,6 +26,25 @@ describe('writing navigation and motivation surfaces', () => {
     expect(settings).toContain('Repeated autosaves with no new words');
     expect(styles).toContain('.focus-mode .topbar');
     expect(styles).toContain('.toast');
+  });
+
+  it('exposes a native-drag manuscript outline with keyboard ordering controls', () => {
+    const app = readFileSync(join(process.cwd(), 'src/app/App.tsx'), 'utf8');
+    const outline = readFileSync(join(process.cwd(), 'src/app/ManuscriptOutline.tsx'), 'utf8');
+    expect(app).toContain("navigate('outline')");
+    expect(app).toContain('repository.reorderChapter');
+    expect(outline).toContain('onDragStart');
+    expect(outline).toContain('application/x-weave-manuscript');
+    expect(outline).toContain('Move ${chapter.title} up');
+    expect(outline).toContain('Move ${scene.title} down');
+  });
+
+  it('keeps nested scene drags and drops from reaching the chapter card', () => {
+    const outline = readFileSync(join(process.cwd(), 'src/app/ManuscriptOutline.tsx'), 'utf8');
+    expect(outline).toContain("onDragStart={(event) => { event.stopPropagation(); dragPayload(event, { kind: 'scene', id: scene.id }); }}");
+    expect(outline).toContain('onDrop={(event) => { event.stopPropagation(); dropOn(event, scene); }}');
+    expect(outline).toContain("if (payload.kind === 'chapter' && 'activeSceneSetId' in target)");
+    expect(outline).toContain("} else if (payload.kind === 'scene' && 'documentId' in target)");
   });
 
   it('reopens metadata-only recent projects in the web fallback', () => {
