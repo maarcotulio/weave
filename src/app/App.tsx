@@ -15,6 +15,7 @@ import { manuscriptDeleteImpact } from '../domain/manuscript-lifecycle';
 import { documentText } from '../domain/manuscript-versions';
 import { HomePage } from './Home';
 import { SettingsPage } from './Settings';
+import { UiKit } from './UiKit';
 
 const isDesktop = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 const formats: ExportFormat[] = ['pdf', 'docx', 'markdown', 'text'];
@@ -46,11 +47,11 @@ function dialogFocusable(dialog: HTMLElement): HTMLElement[] {
 
 function initialDocument(): StructuredDocument { return documentFromText(''); }
 
-type AppRoute = 'home' | 'manuscript' | 'worldbuilding' | 'settings';
+type AppRoute = 'home' | 'manuscript' | 'worldbuilding' | 'settings' | 'ui';
 function routeFromHash(): AppRoute {
   if (typeof window === 'undefined') return 'home';
   const value = (window.location.hash.replace(/^#\/?/, '') || window.location.pathname.split('/').filter(Boolean).at(-1) || '').toLowerCase();
-  return value === 'manuscript' || value === 'worldbuilding' || value === 'settings' ? value : 'home';
+  return value === 'manuscript' || value === 'worldbuilding' || value === 'settings' || value === 'ui' ? value : 'home';
 }
 
 function Toast({ message, tone = 'success', onDismiss }: { message: string; tone?: 'success' | 'error'; onDismiss: () => void }) {
@@ -130,7 +131,6 @@ function Editor({ document, styleProfile, onChange, onSelectionChange, readOnly 
           {(['bold', 'italic', 'underline'] as SemanticMark[]).map((mark) => <button type="button" key={mark} className="format-button" disabled={readOnly} onClick={() => updateBlock(index, toggleMarks(block, [mark]))} aria-label={`Toggle ${mark}`}><strong className={mark === 'italic' ? 'italic' : mark === 'underline' ? 'underline' : ''}>{mark[0].toUpperCase()}</strong></button>)}
         </div>
         <AutoSizeTextArea className={block.kind === 'heading' ? 'manuscript-input heading-input' : 'manuscript-input'} value={blockText(block)} readOnly={readOnly} onChange={(value, selection) => updateBlock(index, replaceBlockText(block, value), selection)} onSelectionChange={(selection) => onSelectionChange?.(block, selection)} ariaLabel={`Block ${index + 1}`} pageBlockId={block.id} sourceBlockId={(block as PaginatedBlock).pagination?.sourceBlockId ?? block.id} />
-        <div className="format-hint">{block.runs.some((run) => run.marks.length > 0) ? block.runs.flatMap((run) => run.marks).join(' · ') : 'semantic paragraph'}</div>
       </div>)}
     {document.blocks.length === 0 && <p className="empty-editor">Start writing…</p>}
   </div>;
@@ -847,6 +847,8 @@ export default function App() {
     closeWorldbuildingTab(worldbuildingTabKey({ kind: 'note', id: note.id }));
     await refresh();
   });
+
+  if (route === 'ui') return <UiKit />;
 
   if (!snapshot) return <><main className="welcome"><div className="welcome-card"><div className="welcome-card-top"><div className="mark">W</div><ThemeControl theme={theme} onToggle={() => setTheme(toggleTheme)} /></div><p className="eyebrow">OFFLINE DESKTOP WRITING</p><h1>Make room for the story.</h1><p className="welcome-copy">Weave keeps your manuscript, revisions, SQLite database, and recovery files in a visible <code>.weave</code> project directory. No server. No network. No guesswork.</p><div className="welcome-actions"><button type="button" className="primary-button" onClick={createProject} disabled={busy}>Create project</button><button type="button" className="secondary-button" onClick={openProject} disabled={busy}>Open project</button></div>{localError && <p className="error-message">{localError}</p>}<p className="offline-note"><span className="status-dot" /> local-only · SQLite · revisioned</p></div></main>{formDialog && <FormDialog config={formDialog} busy={busy} onCancel={() => setFormDialog(undefined)} onSubmit={submitFormDialog} />}</>;
 
