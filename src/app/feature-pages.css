@@ -1,7 +1,7 @@
 /* Home, settings, notifications, and focus mode */
 .brand-home { border: 0; padding: 0; color: var(--ink); background: transparent; }
 .brand-home:hover { color: var(--accent-dark); }
-.workspace-navigation { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }.workspace-sections { display: contents; }
+.workspace-navigation { display: block; }.workspace-sections { display: grid; }
 .workspace-head-actions { display: flex; align-items: center; gap: 10px; }.workspace-manuscript-actions { display: flex; align-items: center; gap: 14px; }.manuscript-version-actions { --version-control-height: 36px; display: flex; align-items: center; gap: 8px; min-height: var(--version-control-height); }.manuscript-version-actions > * { height: var(--version-control-height); min-height: var(--version-control-height); box-sizing: border-box; margin-top: 0; margin-bottom: 0; }.version-help-button { display: grid; place-items: center; flex: 0 0 35px; width: 35px; height: var(--version-control-height); min-height: var(--version-control-height); margin-left: 0; padding: 0; }.version-history-button { padding: 5px 7px; white-space: nowrap; }
 .focus-toggle { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid var(--line); color: var(--muted); background: var(--panel); }.style-controls .focus-toggle { margin-left: auto; }
 .focus-toggle:hover { border-color: var(--border-accent); color: var(--accent-dark); background: var(--accent-tint); }

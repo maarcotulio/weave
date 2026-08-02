@@ -32,15 +32,36 @@ describe('approved UI rework wiring', () => {
     expect(app).not.toContain('>+ Chapter</button>');
   });
 
-  it('keeps four readable workspace controls and accessible search behavior', () => {
+  it('keeps four equal workspace controls in a 2x2 grid with accessible search behavior', () => {
     const app = source('src/app/App.tsx');
     const styles = source('src/app/styles.css');
+    const featureStyles = source('src/app/feature-pages.css');
+    const navigationStart = app.indexOf('<nav className="workspace-route-tabs"');
+    const navigationEnd = app.indexOf('</nav>', navigationStart) + '</nav>'.length;
+    const navigation = app.slice(navigationStart, navigationEnd);
+    const controlsStart = app.indexOf('<div className="workspace-sections">');
+    const controlsEnd = app.indexOf('</div></div>{workspaceMode', controlsStart) + '</div></div>'.length;
+    const controls = app.slice(controlsStart, controlsEnd);
     expect(app).toContain('role="tablist" aria-label="Primary workspaces"');
-    expect(app).toContain('id="project-search-tab"');
-    expect(styles).toContain('grid-template-columns: repeat(4, minmax(0, 1fr));');
+    expect(navigation.match(/<button/g)).toHaveLength(3);
+    expect(navigation).toContain('id="manuscript-workspace-tab"');
+    expect(navigation).toContain('id="outline-workspace-tab"');
+    expect(navigation).toContain('id="worldbuilding-workspace-tab"');
+    expect(navigation).not.toContain('id="project-search-tab"');
+    expect(controls.match(/<button/g)).toHaveLength(4);
+    expect(controls).toContain('id="project-search-tab"');
+    expect(controls).toContain('aria-haspopup="dialog"');
+    expect(controls).toContain('aria-expanded={searchOpen}');
+    expect(controls).toContain('workspace-route-tabs');
+    expect(styles).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));');
+    expect(styles).toContain('grid-template-rows: repeat(2, minmax(38px, auto));');
     expect(styles).toContain('.workspace-sections button:focus-visible');
     expect(styles).toContain('.workspace-search-trigger:focus-visible');
     expect(styles).toContain('.workspace-search-trigger { margin-top: 0; }');
+    expect(styles).toContain('.workspace-route-tabs { display: contents; }');
+    expect(featureStyles).toContain('.workspace-navigation { display: block; }');
+    expect(featureStyles).toContain('.workspace-sections { display: grid; }');
+    expect(featureStyles).not.toContain('.workspace-navigation { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }');
   });
 
   it('styles recent projects as readable metadata cards with contained removal', () => {
