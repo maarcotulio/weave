@@ -8,6 +8,9 @@ describe('Markdown import UI contract', () => {
     const styles = readFileSync(join(process.cwd(), 'src/app/styles.css'), 'utf8');
     expect(app).toContain('Import Markdown into Manuscript');
     expect(app).toContain('Import Markdown into Worldbuilding');
+    expect(app).toContain('{markdownImportDialog && <MarkdownImportDialog');
+    expect(app).toContain('trigger={markdownImportDialog.trigger}');
+    expect(app).toContain('onCancel={() => setMarkdownImportDialog(undefined)}');
     expect(app).toContain('accept=".md,text/markdown" multiple');
     expect(app).toContain('aria-label="Choose Markdown files"');
     expect(app).toContain('Only .md files can be imported');
@@ -16,6 +19,10 @@ describe('Markdown import UI contract', () => {
     expect(app).toContain('repository.createMarkdownNote');
     expect(app).toContain('await autosave.flush()');
     expect(app).toContain('flushActiveMarkdownNote');
+    expect(app).toContain('rollbackInReverse');
+    expect(app).toContain('repository.deleteScene');
+    expect(app).toContain('repository.deleteChapter');
+    expect(app).toContain('repository.deleteMarkdownNote');
     expect(app).not.toContain("invoke('create_scene'");
     expect(styles).toContain('.markdown-file-control');
     expect(styles).toContain('.markdown-file-picker:focus-within');

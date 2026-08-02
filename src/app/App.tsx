@@ -3,7 +3,7 @@ import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { CircleHelp, Maximize2, Minimize2 } from 'lucide-react';
 import { AutosaveController, type AutosaveStatus } from '../domain/autosave';
 import { blockText, documentFromText, replaceBlockText, toggleMarks } from '../domain/document';
-import { markdownToDocument, markdownTitleFromFilename } from '../domain/markdown-import';
+import { markdownToDocument, markdownTitleFromFilename, rollbackInReverse } from '../domain/markdown-import';
 import { DEFAULT_EDITOR_STYLE, FONT_FAMILY_OPTIONS, FONT_SIZE_OPTIONS, LINE_SPACING_OPTIONS, PAGE_SIZE_OPTIONS, type BackupRecord, type CanvasEngine, type Chapter, type ContinuousDraft, type EditorStyleProfile, type ExportFormat, type IntegrityReport, type ManuscriptVersionChange, type ManuscriptVersionComparison, type ManuscriptVersionDetail, type ManuscriptVersionSummary, type MarkdownNote, type WorldbuildingEntry, type WorldbuildingFolder, type ProjectSnapshot, type Scene, type StoryCanvas, type SemanticMark, type StructuredDocument, type WritingStats } from '../domain/types';
 import { canonicalOffsetToPage, effectiveTextMargins, mergePaginatedDocument, pageDimensions, pageOffsetToCanonical, paginateDocumentWithSources, type PaginatedBlock, type PaginatedPage } from '../domain/pagination';
 import { InMemoryProjectRepository, type DocumentHead, type ProjectRepository } from '../domain/repository';
@@ -820,7 +820,17 @@ export default function App() {
     if (dialog.destination === 'worldbuilding') {
       if (!await flushActiveMarkdownNote()) return;
       const notes: MarkdownNote[] = [];
-      for (const file of files) notes.push(await repository.createMarkdownNote(markdownTitleFromFilename(file.name), file.markdown));
+      try {
+        for (const file of files) notes.push(await repository.createMarkdownNote(markdownTitleFromFilename(file.name), file.markdown));
+      } catch (error) {
+        try {
+          await rollbackInReverse(notes, (note) => repository.deleteMarkdownNote(note.id, note.revision));
+        } catch (rollbackError) {
+          const original = error instanceof Error ? error.message : String(error);
+          throw new Error(`${original}; ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
+        }
+        throw error;
+      }
       setMarkdownImportDialog(undefined);
       await refresh();
       const last = notes.at(-1);
@@ -832,7 +842,17 @@ export default function App() {
     if (target === 'scene') {
       if (!selectedChapterId) throw new Error('Select a chapter before importing a Markdown scene.');
       const importedScenes: Scene[] = [];
-      for (const file of files) importedScenes.push(await repository.createScene(selectedChapterId, markdownTitleFromFilename(file.name), markdownToDocument(file.markdown)));
+      try {
+        for (const file of files) importedScenes.push(await repository.createScene(selectedChapterId, markdownTitleFromFilename(file.name), markdownToDocument(file.markdown)));
+      } catch (error) {
+        try {
+          await rollbackInReverse(importedScenes, (scene) => repository.deleteScene(scene.id));
+        } catch (rollbackError) {
+          const original = error instanceof Error ? error.message : String(error);
+          throw new Error(`${original}; ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
+        }
+        throw error;
+      }
       setMarkdownImportDialog(undefined);
       applyRoute('manuscript');
       setMode('scene');
@@ -843,11 +863,21 @@ export default function App() {
     }
     if (!selectedStoryId) throw new Error('Select a story before importing a Markdown chapter.');
     const importedChapters: Chapter[] = [];
-    for (const file of files) {
-      const title = markdownTitleFromFilename(file.name);
-      const chapter = await repository.createChapter(selectedStoryId, title);
-      await repository.createScene(chapter.id, title, markdownToDocument(file.markdown));
-      importedChapters.push(chapter);
+    try {
+      for (const file of files) {
+        const title = markdownTitleFromFilename(file.name);
+        const chapter = await repository.createChapter(selectedStoryId, title);
+        importedChapters.push(chapter);
+        await repository.createScene(chapter.id, title, markdownToDocument(file.markdown));
+      }
+    } catch (error) {
+      try {
+        await rollbackInReverse(importedChapters, (chapter) => repository.deleteChapter(chapter.id));
+      } catch (rollbackError) {
+        const original = error instanceof Error ? error.message : String(error);
+        throw new Error(`${original}; ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
+      }
+      throw error;
     }
     setMarkdownImportDialog(undefined);
     applyRoute('manuscript');
@@ -1154,6 +1184,7 @@ export default function App() {
     {manuscriptVersionDialog?.kind === 'detail' && <VersionDetailDialog detail={manuscriptVersionDialog.detail} busy={busy} trigger={manuscriptVersionDialog.trigger} onCancel={() => setManuscriptVersionDialog(undefined)} onCompare={() => setManuscriptVersionDialog({ kind: 'history', trigger: captureFocusTrigger() })} onRestore={requestRestoreManuscriptVersion} />}
     {manuscriptVersionDialog?.kind === 'comparison' && <VersionComparisonDialog comparison={manuscriptVersionDialog.comparison} busy={busy} trigger={manuscriptVersionDialog.trigger} onCancel={() => setManuscriptVersionDialog(undefined)} />}
     {restoreVersion && <RestoreVersionDialog item={restoreVersion} busy={busy} trigger={restoreVersion.trigger} onCancel={() => setRestoreVersion(undefined)} onConfirm={restoreManuscriptVersion} />}
+    {markdownImportDialog && <MarkdownImportDialog destination={markdownImportDialog.destination} defaultTarget={markdownImportDialog.defaultTarget} canImportScene={Boolean(selectedChapterId)} canImportChapter={Boolean(selectedStoryId)} busy={busy} trigger={markdownImportDialog.trigger} onCancel={() => setMarkdownImportDialog(undefined)} onSubmit={importMarkdownFiles} />}
     {formDialog && <FormDialog config={formDialog} busy={busy} onCancel={() => setFormDialog(undefined)} onSubmit={submitFormDialog} />}
     {worldbuildingCreateDialog && <WorldbuildingCreateDialog busy={busy} trigger={worldbuildingCreateDialog.trigger} onCancel={() => setWorldbuildingCreateDialog(undefined)} onChoice={(choice) => choice === 'note' ? createWorldbuildingNote(worldbuildingCreateDialog.trigger) : choice === 'canvas' ? createWorldbuildingCanvas(worldbuildingCreateDialog.trigger) : createWorldbuildingFolder(worldbuildingCreateDialog.trigger)} />}
     {noteCreateDialog && <NoteCreateDialog busy={busy} onCancel={() => setNoteCreateDialog(undefined)} onSubmit={submitNoteCreate} trigger={noteCreateDialog.trigger} />}

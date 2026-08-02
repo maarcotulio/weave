@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { blockText } from '../domain/document';
-import { markdownTitleFromFilename, markdownToDocument } from '../domain/markdown-import';
+import { markdownTitleFromFilename, markdownToDocument, rollbackInReverse } from '../domain/markdown-import';
 import { InMemoryProjectRepository } from '../domain/repository';
 import { SQLiteProjectRepository } from '../infrastructure/sqlite-repository';
 
@@ -34,6 +34,28 @@ describe('deterministic Markdown import', () => {
     expect(markdownTitleFromFilename('C:\\drafts\\scene.md')).toBe('scene');
     expect(markdownTitleFromFilename('   ')).toBe('Untitled import');
     expect(markdownTitleFromFilename('notes.txt')).toBe('notes.txt');
+  });
+
+  it('compensates multi-file mutations in reverse order when a later file fails', async () => {
+    const created: string[] = [];
+    const removed: string[] = [];
+    await expect((async () => {
+      for (const name of ['first.md', 'second.md', 'third.md']) {
+        if (name === 'third.md') throw new Error('simulated mutation failure');
+        created.push(name);
+      }
+    })()).rejects.toThrow('simulated mutation failure');
+    await rollbackInReverse(created, async (name) => { removed.push(name); });
+    expect(removed).toEqual(['second.md', 'first.md']);
+  });
+
+  it('attempts every rollback even when one compensation fails', async () => {
+    const removed: string[] = [];
+    await expect(rollbackInReverse(['first', 'second', 'third'], async (name) => {
+      removed.push(name);
+      if (name === 'second') throw new Error('delete failed');
+    })).rejects.toThrow('delete failed');
+    expect(removed).toEqual(['third', 'second', 'first']);
   });
 
   it('creates manuscript scenes with imported structured documents through the repository', async () => {

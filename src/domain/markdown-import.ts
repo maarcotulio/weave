@@ -23,3 +23,16 @@ export function markdownTitleFromFilename(filename: string): string {
   const title = basename.replace(/\.md$/i, '').trim();
   return title || 'Untitled import';
 }
+
+/** Remove created records in reverse order, attempting every compensation. */
+export async function rollbackInReverse<T>(created: readonly T[], remove: (value: T) => Promise<void>): Promise<void> {
+  const failures: string[] = [];
+  for (let index = created.length - 1; index >= 0; index -= 1) {
+    try {
+      await remove(created[index]);
+    } catch (error) {
+      failures.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  if (failures.length) throw new Error(`Markdown import rollback failed: ${failures.join('; ')}`);
+}
