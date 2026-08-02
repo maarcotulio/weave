@@ -40,6 +40,7 @@ describe('approved UI rework wiring', () => {
     expect(styles).toContain('grid-template-columns: repeat(4, minmax(0, 1fr));');
     expect(styles).toContain('.workspace-sections button:focus-visible');
     expect(styles).toContain('.workspace-search-trigger:focus-visible');
+    expect(styles).toContain('.workspace-search-trigger { margin-top: 0; }');
   });
 
   it('styles recent projects as readable metadata cards with contained removal', () => {
