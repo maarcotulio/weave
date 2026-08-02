@@ -24,6 +24,9 @@ import type {
   MarkdownNote,
   NoteLink,
   StoryCanvas,
+  WorldbuildingFolder,
+  WorldbuildingEntry,
+  WorldbuildingEntryKind,
   CanvasPosition,
   CanvasViewport,
   CanvasNode,
@@ -54,6 +57,12 @@ export class TauriProjectRepository implements ProjectRepository {
   deleteScene(sceneId: string): Promise<void> { return command('delete_scene', { sceneId }); }
   reorderChapter(chapterId: string, position: number): Promise<Chapter[]> { return command('reorder_chapter', { chapterId, position }); }
   reorderScene(sceneId: string, position: number): Promise<Scene[]> { return command('reorder_scene', { sceneId, position }); }
+  createWorldbuildingFolder(title: string, parentId?: string): Promise<WorldbuildingFolder> { return command('create_worldbuilding_folder', { title, parentId }); }
+  renameWorldbuildingFolder(folderId: string, title: string): Promise<WorldbuildingFolder> { return command('rename_worldbuilding_folder', { folderId, title }); }
+  deleteWorldbuildingFolder(folderId: string): Promise<void> { return command('delete_worldbuilding_folder', { folderId }); }
+  listWorldbuildingFolders(): Promise<WorldbuildingFolder[]> { return command('list_worldbuilding_folders'); }
+  listWorldbuildingEntries(parentId?: string): Promise<WorldbuildingEntry[]> { return command('list_worldbuilding_entries', { parentId }); }
+  moveWorldbuildingEntry(kind: WorldbuildingEntryKind, id: string, parentId?: string, position?: number): Promise<WorldbuildingEntry[]> { return command('move_worldbuilding_entry', { kind, id, parentId, position }); }
   createMarkdownNote(title: string, markdown?: string): Promise<MarkdownNote> { return command('create_markdown_note', { title, markdown }); }
   updateMarkdownNote(noteId: string, input: { title: string; markdown: string }, expectedRevision: number): Promise<MarkdownNote> { return command('update_markdown_note', { noteId, input, expectedRevision }); }
   deleteMarkdownNote(noteId: string, expectedRevision: number, mode?: 'reject' | 'remove-references'): Promise<void> { return command('delete_markdown_note', { noteId, expectedRevision, mode }); }

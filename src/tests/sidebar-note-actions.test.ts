@@ -7,18 +7,17 @@ const workspaceSource = readFileSync(join(process.cwd(), 'src/app/Worldbuilding.
 
 describe('Markdown note sidebar actions', () => {
   it('keeps note opening on the title and isolates row actions', () => {
-    expect(appSource).toContain('worldbuilding-sidebar-note-row');
-    expect(appSource).toContain("worldbuilding-sidebar-note-row ${selected ? 'selected' : ''}");
-    expect(appSource).toContain('worldbuilding-sidebar-note-title');
-    expect(appSource).toContain('onClick={() => openWorldbuildingTab({ kind: \'note\', id: note.id })}');
-    expect(appSource).toContain('event.stopPropagation(); requestRenameNote(note)');
-    expect(appSource).toContain('event.stopPropagation(); requestDeleteNote(note)');
+    expect(appSource).toContain('worldbuilding-file-row');
+    expect(appSource).toContain('WorldbuildingTree');
+    expect(appSource).toContain('onClick={() => entry.kind !== \'folder\' && onOpen(entry)}');
+    expect(appSource).toContain('onRenameNote');
+    expect(appSource).toContain('onDeleteNote');
     expect(appSource).toContain("import { Pencil, Plus, Trash2 } from 'lucide-react'");
-    expect(appSource).toContain('<Pencil size={14} strokeWidth={2} aria-hidden="true" />');
-    expect(appSource).toContain('<Trash2 size={14} strokeWidth={2} aria-hidden="true" />');
-    expect(readFileSync(join(process.cwd(), 'src/app/styles.css'), 'utf8')).toContain('.worldbuilding-sidebar-note-row:hover, .worldbuilding-sidebar-note-row:focus-within, .worldbuilding-sidebar-note-row.selected { background: var(--accent-tint); }');
-    expect(appSource).not.toContain('worldbuilding-sidebar-note-action">Rename');
-    expect(appSource).not.toContain('worldbuilding-sidebar-note-delete" aria-label={`Delete ${note.title}`} onClick');
+    expect(appSource).toContain('<Pencil size={13} aria-hidden="true" />');
+    expect(appSource).toContain('<Trash2 size={13} aria-hidden="true" />');
+    expect(readFileSync(join(process.cwd(), 'src/app/styles.css'), 'utf8')).toContain('.worldbuilding-file-row:hover, .worldbuilding-file-row.selected { background: var(--accent-tint); }');
+    expect(appSource).toContain('onDragStart');
+    expect(appSource).not.toContain('worldbuilding-sidebar-note-row');
   });
 
   it('keeps rename and delete out of the note editor header', () => {
@@ -63,7 +62,7 @@ describe('Markdown note sidebar actions', () => {
     expect(createStart).toBeGreaterThanOrEqual(0);
     expect(submitStart).toBeGreaterThan(createStart);
     expect(canvasStart).toBeGreaterThan(submitStart);
-    expect(appSource.slice(createStart, submitStart)).toContain('await autosave.flush(); setNoteCreateDialog({ trigger });');
+    expect(appSource.slice(createStart, submitStart)).toContain('await autosave.flush(); setWorldbuildingCreateDialog(undefined); setNoteCreateDialog({ trigger });');
     expect(appSource.slice(createStart, submitStart)).not.toContain('createMarkdownNote');
     const submitFlow = appSource.slice(submitStart, canvasStart);
     expect(submitFlow).toContain('const name = title.trim();');
