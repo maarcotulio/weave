@@ -24,12 +24,46 @@ describe('approved UI rework wiring', () => {
     expect(worldbuilding).not.toContain('Derived worldbuilding index');
   });
 
-  it('aligns version controls and exposes a disabled heading-level chapter action', () => {
+  it('places the chapter action below the selected chapter scene action', () => {
     const app = source('src/app/App.tsx');
-    const styles = source('src/app/feature-pages.css');
-    expect(app).toContain('className="sidebar-new-chapter secondary-button"');
-    expect(app).toContain('disabled={!selectedStoryId}');
-    expect(styles).toContain('--version-control-height: 36px');
-    expect(styles).toContain('min-height: var(--version-control-height)');
+    expect(app).toContain('className="add-scene" onClick={addScene}>+ New scene');
+    expect(app).toContain('className="add-chapter" onClick={addChapter} disabled={!selectedStoryId}>+ New chapter');
+    expect(app).not.toContain('sidebar-new-chapter');
+    expect(app).not.toContain('>+ Chapter</button>');
+  });
+
+  it('keeps four readable workspace controls and accessible search behavior', () => {
+    const app = source('src/app/App.tsx');
+    const styles = source('src/app/styles.css');
+    expect(app).toContain('role="tablist" aria-label="Primary workspaces"');
+    expect(app).toContain('id="project-search-tab"');
+    expect(styles).toContain('grid-template-columns: repeat(4, minmax(0, 1fr));');
+    expect(styles).toContain('.workspace-sections button:focus-visible');
+    expect(styles).toContain('.workspace-search-trigger:focus-visible');
+  });
+
+  it('styles recent projects as readable metadata cards with contained removal', () => {
+    const styles = source('src/app/styles.css');
+    expect(styles).toContain('.recent-projects li:hover, .recent-projects li:focus-within');
+    expect(styles).toContain('font: 600 14px/1.3 var(--font-display)');
+    expect(styles).toContain('font: var(--text-meta)');
+    expect(styles).toContain('.recent-project-remove:focus-visible');
+  });
+
+  it('puts the manuscript action in the Home header and removes the overview action row', () => {
+    const home = source('src/app/Home.tsx');
+    const headerStart = home.indexOf('<header className="home-header">');
+    const headerEnd = home.indexOf('</header>', headerStart);
+    expect(home.slice(headerStart, headerEnd)).toContain('Open manuscript');
+    expect(home.slice(headerEnd)).not.toContain('className="home-actions"');
+  });
+
+  it('uses the page surface for the Files tree while preserving its accessible tree label', () => {
+    const app = source('src/app/App.tsx');
+    const styles = source('src/app/styles.css');
+    expect(app).toContain('<h2>Files</h2>');
+    expect(app).toContain('aria-label="Worldbuilding files"');
+    expect(styles).toContain('.worldbuilding-file-tree { margin-bottom: 22px; padding: 8px 2px; background: var(--bg); border: 0; }');
+    expect(styles).toContain('.worldbuilding-file-actions button:hover, .worldbuilding-file-actions button:focus-visible');
   });
 });
