@@ -10,7 +10,10 @@ describe('project search UI wiring', () => {
     expect(search).toContain('No results found.');
     expect(search).toContain('role="listbox"');
     expect(search).toContain('searchResultKindLabel');
-    expect(app).toContain('<ProjectSearch repository={repository} snapshot={snapshot} onNavigate={openSearchTarget} />');
+    expect(app).toContain('id="project-search-tab"');
+    expect(app).toContain('<ProjectSearch repository={repository} snapshot={snapshot} open={searchOpen}');
+    expect(search).toContain('role="dialog"');
+    expect(search).toContain('canDismissWithEscape');
     expect(app).toContain('await autosave.flush();');
     expect(app).toContain("target.kind === 'continuous-draft'");
     expect(app).toContain('flushActiveMarkdownNote');
