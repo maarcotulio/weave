@@ -100,11 +100,32 @@ export interface Scene {
 }
 
 /** A user-authored Markdown note; its link index is derived only from [[...]] tokens. */
+export interface WorldbuildingFolder {
+  id: string;
+  projectId: string;
+  title: string;
+  parentId?: string;
+  position: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type WorldbuildingEntryKind = 'folder' | 'note' | 'canvas';
+export interface WorldbuildingEntry {
+  kind: WorldbuildingEntryKind;
+  id: string;
+  title: string;
+  parentId?: string;
+  position: number;
+}
+
 export interface MarkdownNote {
   id: string;
   projectId: string;
   title: string;
   markdown: string;
+  folderId?: string;
+  position?: number;
   revision: number;
   createdAt: string;
   updatedAt: string;
@@ -138,6 +159,8 @@ export interface StoryCanvas {
   id: string;
   storyId: string;
   title: string;
+  folderId?: string;
+  position?: number;
   viewport: CanvasViewport;
   /** Optional on the type for reading pre-choice records; new records always persist it. */
   engine?: CanvasEngine;
@@ -316,6 +339,7 @@ export interface ProjectSnapshot {
   sceneSets: SceneSet[];
   scenes: Scene[];
   continuousDrafts: ContinuousDraft[];
+  worldbuildingFolders?: WorldbuildingFolder[];
   markdownNotes: MarkdownNote[];
   noteLinks: NoteLink[];
   canvases: StoryCanvas[];

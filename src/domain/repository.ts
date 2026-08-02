@@ -32,6 +32,9 @@ import {
   type MarkdownNote,
   type NoteLink,
   type StoryCanvas,
+  type WorldbuildingFolder,
+  type WorldbuildingEntry,
+  type WorldbuildingEntryKind,
   type CanvasPosition,
   type CanvasViewport,
   type CanvasNode,
@@ -99,6 +102,12 @@ export interface ProjectRepository {
   deleteScene(sceneId: string): Promise<void>;
   reorderChapter(chapterId: string, position: number): Promise<Chapter[]>;
   reorderScene(sceneId: string, position: number): Promise<Scene[]>;
+  createWorldbuildingFolder(title: string, parentId?: string): Promise<WorldbuildingFolder>;
+  renameWorldbuildingFolder(folderId: string, title: string): Promise<WorldbuildingFolder>;
+  deleteWorldbuildingFolder(folderId: string): Promise<void>;
+  listWorldbuildingFolders(): Promise<WorldbuildingFolder[]>;
+  listWorldbuildingEntries(parentId?: string): Promise<WorldbuildingEntry[]>;
+  moveWorldbuildingEntry(kind: WorldbuildingEntryKind, id: string, parentId?: string, position?: number): Promise<WorldbuildingEntry[]>;
   createMarkdownNote(title: string, markdown?: string): Promise<MarkdownNote>;
   updateMarkdownNote(noteId: string, input: { title: string; markdown: string }, expectedRevision: number): Promise<MarkdownNote>;
   deleteMarkdownNote(noteId: string, expectedRevision: number, mode?: 'reject' | 'remove-references'): Promise<void>;
@@ -189,6 +198,7 @@ interface RepositoryState {
   canvases: StoryCanvas[];
   canvasNodes: CanvasNode[];
   canvasEdges: CanvasEdge[];
+  worldbuildingFolders: WorldbuildingFolder[];
   styleProfile: EditorStyleProfile;
   writingGoals: WritingGoals;
   manuscriptVersions: StoredManuscriptVersion[];
@@ -223,6 +233,7 @@ export class InMemoryProjectRepository implements ProjectRepository {
     canvases: [],
     canvasNodes: [],
     canvasEdges: [],
+    worldbuildingFolders: [],
     styleProfile: { ...DEFAULT_EDITOR_STYLE },
     writingGoals: { dailyTarget: 500, dailyWordCounts: {} },
     manuscriptVersions: [],
@@ -231,9 +242,9 @@ export class InMemoryProjectRepository implements ProjectRepository {
   protected backupStates = new Map<string, RepositoryState>();
 
   async createProject(directory: string, name: string): Promise<Project> {
-    this.state = { stories: [], chapters: [], sceneSets: [], scenes: [], documents: [], drafts: [], backups: [], worldbuildingItems: [], relationships: [], documentLinks: [], markdownNotes: [], noteLinks: [], canvases: [], canvasNodes: [], canvasEdges: [], styleProfile: { ...DEFAULT_EDITOR_STYLE }, writingGoals: { dailyTarget: 500, dailyWordCounts: {} }, manuscriptVersions: [], status: initialStatus() };
+    this.state = { stories: [], chapters: [], sceneSets: [], scenes: [], documents: [], drafts: [], backups: [], worldbuildingItems: [], relationships: [], documentLinks: [], markdownNotes: [], noteLinks: [], canvases: [], canvasNodes: [], canvasEdges: [], worldbuildingFolders: [], styleProfile: { ...DEFAULT_EDITOR_STYLE }, writingGoals: { dailyTarget: 500, dailyWordCounts: {} }, manuscriptVersions: [], status: initialStatus() };
     this.backupStates.clear();
-    const project: Project = { id: newId('project'), name, directory, schemaVersion: 5, createdAt: now(), updatedAt: now() };
+    const project: Project = { id: newId('project'), name, directory, schemaVersion: 6, createdAt: now(), updatedAt: now() };
     this.state.project = project;
     this.state.status = { state: 'saved', message: 'Project created', at: now() };
     return deepClone(project);
@@ -554,10 +565,92 @@ export class InMemoryProjectRepository implements ProjectRepository {
     return deepClone(this.state.documentLinks.filter((link) => !documentId || link.anchor.documentId === documentId));
   }
 
+  async createWorldbuildingFolder(title: string, parentId?: string): Promise<WorldbuildingFolder> {
+    const project = await this.getProject();
+    if (!title.trim()) throw new Error('A folder title is required');
+    if (parentId) this.requireWorldbuildingFolder(parentId);
+    this.normalizeWorldbuildingPositions();
+    const folder: WorldbuildingFolder = { id: newId('world-folder'), projectId: project.id, title: title.trim(), parentId, position: this.worldbuildingSiblingEntries(parentId).length, createdAt: now(), updatedAt: now() };
+    this.state.worldbuildingFolders.push(folder);
+    this.touchProject();
+    this.state.status = { state: 'saved', message: 'Worldbuilding folder created', at: now() };
+    return deepClone(folder);
+  }
+
+  async renameWorldbuildingFolder(folderId: string, title: string): Promise<WorldbuildingFolder> {
+    const folder = this.requireWorldbuildingFolder(folderId);
+    if (!title.trim()) throw new Error('A folder title is required');
+    folder.title = title.trim();
+    folder.updatedAt = now();
+    this.touchProject();
+    this.state.status = { state: 'saved', message: 'Worldbuilding folder renamed', at: now() };
+    return deepClone(folder);
+  }
+
+  async deleteWorldbuildingFolder(folderId: string): Promise<void> {
+    const folder = this.requireWorldbuildingFolder(folderId);
+    const before = deepClone(this.state);
+    try {
+      const descendants = this.worldbuildingDescendants(folderId);
+      const folderIds = new Set([folderId, ...descendants]);
+      const noteIds = new Set(this.state.markdownNotes.filter((note) => note.folderId && folderIds.has(note.folderId)).map((note) => note.id));
+      const canvasIds = new Set(this.state.canvases.filter((canvas) => canvas.folderId && folderIds.has(canvas.folderId)).map((canvas) => canvas.id));
+      const removedNoteLinkIds = new Set(this.state.noteLinks.filter((link) => noteIds.has(link.noteId)).map((link) => link.id));
+      this.state.noteLinks = this.state.noteLinks.filter((link) => !noteIds.has(link.noteId)).map((link) => noteIds.has(link.targetId ?? '') ? { ...link, targetId: undefined } : link);
+      const removedNodeIds = new Set(this.state.canvasNodes.filter((node) => canvasIds.has(node.canvasId) || noteIds.has(node.entityId)).map((node) => node.id));
+      this.state.canvasNodes = this.state.canvasNodes.filter((node) => !removedNodeIds.has(node.id));
+      this.state.canvasEdges = this.state.canvasEdges.filter((edge) => !canvasIds.has(edge.canvasId) && !removedNodeIds.has(edge.sourceNodeId) && !removedNodeIds.has(edge.targetNodeId) && !removedNoteLinkIds.has(edge.noteLinkId));
+      this.state.markdownNotes = this.state.markdownNotes.filter((note) => !noteIds.has(note.id));
+      this.state.canvases = this.state.canvases.filter((canvas) => !canvasIds.has(canvas.id));
+      this.state.worldbuildingFolders = this.state.worldbuildingFolders.filter((candidate) => !folderIds.has(candidate.id));
+      this.normalizeWorldbuildingPositions();
+      this.touchProject();
+      this.state.status = { state: 'saved', message: `Folder “${folder.title}” and nested content deleted safely`, at: now() };
+    } catch (error) {
+      this.state = before;
+      throw error;
+    }
+  }
+
+  async listWorldbuildingFolders(): Promise<WorldbuildingFolder[]> {
+    this.normalizeWorldbuildingPositions();
+    return deepClone(this.state.worldbuildingFolders.slice().sort((left, right) => this.compareWorldbuildingRecords(left, right)));
+  }
+
+  async listWorldbuildingEntries(parentId?: string): Promise<WorldbuildingEntry[]> {
+    this.normalizeWorldbuildingPositions();
+    return deepClone(this.worldbuildingSiblingEntries(parentId).map((entry) => ({ kind: entry.kind, id: entry.id, title: entry.title, parentId: entry.parentId, position: entry.position })));
+  }
+
+  async moveWorldbuildingEntry(kind: WorldbuildingEntryKind, id: string, parentId?: string, position?: number): Promise<WorldbuildingEntry[]> {
+    this.normalizeWorldbuildingPositions();
+    if (parentId) this.requireWorldbuildingFolder(parentId);
+    const source = this.requireWorldbuildingEntry(kind, id);
+    if (kind === 'folder') {
+      if (source.id === parentId) throw new Error('A folder cannot be moved into itself');
+      if (parentId && this.worldbuildingDescendants(source.id).includes(parentId)) throw new Error('A folder cannot be moved into its descendant');
+    }
+    const oldParentId = source.parentId;
+    const siblings = this.worldbuildingSiblingEntries(oldParentId).filter((entry) => !(entry.kind === kind && entry.id === id));
+    if (kind === 'folder') this.state.worldbuildingFolders.find((folder) => folder.id === id)!.parentId = parentId;
+    if (kind === 'note') this.state.markdownNotes.find((note) => note.id === id)!.folderId = parentId;
+    if (kind === 'canvas') this.state.canvases.find((canvas) => canvas.id === id)!.folderId = parentId;
+    const target = this.worldbuildingSiblingEntries(parentId).filter((entry) => !(entry.kind === kind && entry.id === id));
+    const bounded = Math.max(0, Math.min(Math.trunc(position ?? target.length), target.length));
+    const moved = { ...source, parentId, position: bounded };
+    target.splice(bounded, 0, moved);
+    this.assignWorldbuildingPositions(siblings);
+    this.assignWorldbuildingPositions(target);
+    this.touchProject();
+    this.state.status = { state: 'saved', message: 'Worldbuilding order saved', at: now() };
+    return deepClone(this.worldbuildingSiblingEntries(parentId));
+  }
+
   async createMarkdownNote(title: string, markdown = ''): Promise<MarkdownNote> {
     const project = await this.getProject();
     if (!title.trim()) throw new Error('A note title is required');
-    const note: MarkdownNote = { id: newId('note'), projectId: project.id, title: title.trim(), markdown, revision: 1, createdAt: now(), updatedAt: now() };
+    this.normalizeWorldbuildingPositions();
+    const note: MarkdownNote = { id: newId('note'), projectId: project.id, title: title.trim(), markdown, position: this.worldbuildingSiblingEntries(undefined).length, revision: 1, createdAt: now(), updatedAt: now() };
     this.state.markdownNotes.push(note);
     this.state.noteLinks.push(...this.rebuildNoteLinks(note, []));
     this.touchProject();
@@ -591,6 +684,7 @@ export class InMemoryProjectRepository implements ProjectRepository {
     this.state.canvasNodes = this.state.canvasNodes.filter((node) => !nodeIds.has(node.id));
     this.state.canvasEdges = this.state.canvasEdges.filter((edge) => !outgoingLinkIds.has(edge.noteLinkId) && !nodeIds.has(edge.sourceNodeId) && !nodeIds.has(edge.targetNodeId));
     this.state.markdownNotes = this.state.markdownNotes.filter((candidate) => candidate.id !== noteId);
+    this.normalizeWorldbuildingPositions();
     this.touchProject();
     this.state.status = { state: 'saved', message: 'Markdown note deleted safely', at: now() };
   }
@@ -623,7 +717,8 @@ export class InMemoryProjectRepository implements ProjectRepository {
     this.requireStory(storyId);
     if (!title.trim()) throw new Error('Canvas title is required');
     this.validateCanvasEngine(engine);
-    const canvas: StoryCanvas = { id: newId('canvas'), storyId, title: title.trim(), engine, viewport: { x: 0, y: 0, zoom: 1 }, revision: 1, createdAt: now(), updatedAt: now(), ...(engine === 'excalidraw' ? { excalidrawState: this.emptyExcalidrawState() } : {}) };
+    this.normalizeWorldbuildingPositions();
+    const canvas: StoryCanvas = { id: newId('canvas'), storyId, title: title.trim(), position: this.worldbuildingSiblingEntries(undefined).length, engine, viewport: { x: 0, y: 0, zoom: 1 }, revision: 1, createdAt: now(), updatedAt: now(), ...(engine === 'excalidraw' ? { excalidrawState: this.emptyExcalidrawState() } : {}) };
     this.state.canvases.push(canvas);
     this.touchProject();
     this.state.status = { state: 'saved', message: `${engine === 'excalidraw' ? 'Excalidraw' : 'React Flow'} canvas saved`, at: now() };
@@ -645,6 +740,7 @@ export class InMemoryProjectRepository implements ProjectRepository {
     this.state.canvasNodes = this.state.canvasNodes.filter((node) => node.canvasId !== canvasId);
     this.state.canvasEdges = this.state.canvasEdges.filter((edge) => edge.canvasId !== canvasId && !nodeIds.has(edge.sourceNodeId) && !nodeIds.has(edge.targetNodeId));
     this.state.canvases = this.state.canvases.filter((candidate) => candidate.id !== canvasId);
+    this.normalizeWorldbuildingPositions();
     this.touchProject();
     this.state.status = { state: 'saved', message: `Canvas “${canvas.title}” deleted; Markdown notes are unchanged`, at: now() };
   }
@@ -1008,6 +1104,7 @@ export class InMemoryProjectRepository implements ProjectRepository {
       sceneSets: deepClone(this.state.sceneSets),
       scenes: deepClone(this.state.scenes),
       continuousDrafts: deepClone(this.state.drafts),
+      worldbuildingFolders: deepClone(this.state.worldbuildingFolders),
       markdownNotes: deepClone(this.state.markdownNotes),
       noteLinks: deepClone(this.state.noteLinks),
       canvases: deepClone(this.state.canvases.map((canvas) => this.normalizeCanvas(canvas))),
@@ -1051,6 +1148,61 @@ export class InMemoryProjectRepository implements ProjectRepository {
     const record = { id, headRevision: 1, revisions: [revision] };
     this.state.documents.push(record);
     return record;
+  }
+
+  protected requireWorldbuildingFolder(folderId: string): WorldbuildingFolder {
+    const folder = this.state.worldbuildingFolders.find((candidate) => candidate.id === folderId);
+    if (!folder) throw new Error(`Unknown Worldbuilding folder ${folderId}`);
+    return folder;
+  }
+
+  protected requireWorldbuildingEntry(kind: WorldbuildingEntryKind, id: string): WorldbuildingEntry {
+    const entry = kind === 'folder' ? this.state.worldbuildingFolders.find((candidate) => candidate.id === id) : kind === 'note' ? this.state.markdownNotes.find((candidate) => candidate.id === id) : this.state.canvases.find((candidate) => candidate.id === id);
+    if (entry) return { kind, id, title: entry.title, parentId: kind === 'folder' ? (entry as WorldbuildingFolder).parentId : kind === 'note' ? (entry as MarkdownNote).folderId : (entry as StoryCanvas).folderId, position: entry.position ?? 0 };
+    if (kind === 'folder') this.requireWorldbuildingFolder(id);
+    if (kind === 'note') this.requireMarkdownNote(id);
+    if (kind === 'canvas') this.requireCanvas(id);
+    throw new Error(`Unknown Worldbuilding ${kind} ${id}`);
+  }
+
+  protected worldbuildingDescendants(folderId: string): string[] {
+    const descendants: string[] = [];
+    const pending = [folderId];
+    while (pending.length) {
+      const parent = pending.shift()!;
+      const children = this.state.worldbuildingFolders.filter((folder) => folder.parentId === parent).map((folder) => folder.id);
+      descendants.push(...children);
+      pending.push(...children);
+    }
+    return descendants;
+  }
+
+  protected worldbuildingSiblingEntries(parentId?: string): WorldbuildingEntry[] {
+    const folders = this.state.worldbuildingFolders.filter((folder) => folder.parentId === parentId).map((folder) => ({ kind: 'folder' as const, id: folder.id, title: folder.title, parentId: folder.parentId, position: folder.position }));
+    const notes = this.state.markdownNotes.filter((note) => note.folderId === parentId).map((note) => ({ kind: 'note' as const, id: note.id, title: note.title, parentId: note.folderId, position: note.position ?? 0 }));
+    const canvases = this.state.canvases.filter((canvas) => canvas.folderId === parentId).map((canvas) => ({ kind: 'canvas' as const, id: canvas.id, title: canvas.title, parentId: canvas.folderId, position: canvas.position ?? 0 }));
+    return [...folders, ...notes, ...canvases].sort((left, right) => this.compareWorldbuildingRecords(left, right));
+  }
+
+  protected compareWorldbuildingRecords(left: { position?: number; createdAt?: string; id: string; kind?: string }, right: { position?: number; createdAt?: string; id: string; kind?: string }): number {
+    const position = (left.position ?? Number.MAX_SAFE_INTEGER) - (right.position ?? Number.MAX_SAFE_INTEGER);
+    if (position) return position;
+    const kind = (left.kind ?? '').localeCompare(right.kind ?? '');
+    if (kind) return kind;
+    return left.id.localeCompare(right.id);
+  }
+
+  protected assignWorldbuildingPositions(entries: WorldbuildingEntry[]): void {
+    entries.forEach((entry, position) => {
+      if (entry.kind === 'folder') { const folder = this.state.worldbuildingFolders.find((candidate) => candidate.id === entry.id); if (folder) folder.position = position; }
+      if (entry.kind === 'note') { const note = this.state.markdownNotes.find((candidate) => candidate.id === entry.id); if (note) note.position = position; }
+      if (entry.kind === 'canvas') { const canvas = this.state.canvases.find((candidate) => candidate.id === entry.id); if (canvas) canvas.position = position; }
+    });
+  }
+
+  protected normalizeWorldbuildingPositions(): void {
+    const parents = new Set<string | undefined>([undefined, ...this.state.worldbuildingFolders.map((folder) => folder.id)]);
+    for (const parent of parents) this.assignWorldbuildingPositions(this.worldbuildingSiblingEntries(parent));
   }
 
   protected requireMarkdownNote(noteId: string): MarkdownNote {

@@ -106,6 +106,59 @@ describe('notes-only worldbuilding', () => {
   });
 });
 
+describe('nested Worldbuilding folders', () => {
+  it('supports mixed deterministic ordering, nested moves, and cycle rejection', async () => {
+    const { repository, story } = await fixture();
+    const rootNote = await repository.createMarkdownNote('Root note');
+    const canvas = await repository.createCanvas(story.id, 'Map');
+    const parent = await repository.createWorldbuildingFolder('Parent');
+    const child = await repository.createWorldbuildingFolder('Child', parent.id);
+    const nested = await repository.createMarkdownNote('Nested note');
+    const movedNoteEntries = await repository.moveWorldbuildingEntry('note', nested.id, child.id);
+    expect(movedNoteEntries.map((entry) => entry.title)).toEqual(['Nested note']);
+    const movedCanvasEntries = await repository.moveWorldbuildingEntry('canvas', canvas.id, parent.id, 0);
+    expect(movedCanvasEntries.map((entry) => entry.title)).toEqual(['Map', 'Child']);
+    expect((await repository.listWorldbuildingEntries(parent.id)).map((entry) => entry.title)).toEqual(['Map', 'Child']);
+    expect((await repository.listWorldbuildingEntries(child.id)).map((entry) => entry.title)).toEqual(['Nested note']);
+    expect((await repository.listWorldbuildingEntries()).map((entry) => entry.title)).toEqual(['Root note', 'Parent']);
+    await expect(repository.moveWorldbuildingEntry('folder', parent.id, child.id)).rejects.toThrow('descendant');
+    await expect(repository.moveWorldbuildingEntry('folder', parent.id, parent.id)).rejects.toThrow('itself');
+  });
+
+  it('reindexes old and new sibling lists for explicit insertion positions', async () => {
+    const { repository } = await fixture();
+    const first = await repository.createMarkdownNote('First');
+    const second = await repository.createMarkdownNote('Second');
+    const folder = await repository.createWorldbuildingFolder('Folder');
+
+    await repository.moveWorldbuildingEntry('note', first.id, folder.id);
+    const moved = await repository.moveWorldbuildingEntry('note', second.id, folder.id, 0);
+
+    expect(moved.map((entry) => [entry.title, entry.position])).toEqual([['Second', 0], ['First', 1]]);
+    expect((await repository.listWorldbuildingEntries()).map((entry) => [entry.title, entry.position])).toEqual([['Folder', 0]]);
+  });
+
+  it('recursively deletes folder content while preserving repairable incoming links and unrelated files', async () => {
+    const { repository, story } = await fixture();
+    const folder = await repository.createWorldbuildingFolder('Delete me');
+    const child = await repository.createWorldbuildingFolder('Nested', folder.id);
+    const target = await repository.createMarkdownNote('Target');
+    const source = await repository.createMarkdownNote('Source', '[[Target]]');
+    await repository.moveWorldbuildingEntry('note', target.id, child.id);
+    const canvas = await repository.createCanvas(story.id, 'Nested canvas');
+    await repository.moveWorldbuildingEntry('canvas', canvas.id, child.id);
+    const saved = await repository.updateMarkdownNote(source.id, { title: source.title, markdown: source.markdown }, source.revision);
+    const placement = await repository.addCanvasNode(canvas.id, target.id, { x: 1, y: 2 }, canvas.revision);
+    expect(placement.entityId).toBe(target.id);
+    await repository.deleteWorldbuildingFolder(folder.id);
+    expect((await repository.listWorldbuildingFolders()).map((item) => item.id)).not.toContain(child.id);
+    expect(await repository.listMarkdownNotes()).toEqual([expect.objectContaining({ id: source.id })]);
+    expect(await repository.listCanvases()).toEqual([]);
+    expect((await repository.listNoteLinks(saved.id))[0].targetId).toBeUndefined();
+  });
+
+});
+
 describe('offline persistence and accessible workspace', () => {
   let directory: string | undefined;
   afterEach(async () => { if (directory) await rm(directory, { recursive: true, force: true }); directory = undefined; });
@@ -212,7 +265,7 @@ describe('offline persistence and accessible workspace', () => {
     expect(component).toContain('Canvas outline');
     expect(component).toContain('Keyboard-accessible list of every note node and resolved wiki-link edge.');
     expect(component).toContain('[[Note title|label]]');
-    expect(component).toContain('Create new note</button><button type="button" onClick={onCreateCanvas}>Create new canvas</button><button type="button" onClick={onReturnToManuscript}>Close');
+    expect(component).toContain('Create in Worldbuilding</button><button type="button" onClick={onReturnToManuscript}>Close');
     expect(component).not.toContain('worldbuilding-nav');
     expect(component).not.toContain('Create typed relationship');
     expect(component).not.toContain('Anchored, not parsed');
@@ -223,20 +276,17 @@ describe('offline persistence and accessible workspace', () => {
     expect(app).toContain('Choose a canvas engine');
     expect(app).toContain('Create canvas');
     expect(app).toContain('Escape');
-    expect(app).toContain('worldbuilding-sidebar-group');
     expect(app).toContain('worldbuildingTabs');
-    expect(app).toContain("import { Pencil, Plus, Trash2 } from 'lucide-react'");
-    expect(app).toContain('worldbuilding-sidebar-heading');
-    expect(app).toContain('worldbuilding-sidebar-canvas-row');
-    expect(app).toContain('worldbuilding-sidebar-canvas-actions');
-    expect(app).toContain('requestRenameCanvas(canvas)');
-    expect(app).toContain('requestDeleteCanvas(canvas)');
-    expect(app).toContain('repository.updateCanvas(canvas.id, { title: nextTitle.trim() }, canvas.revision)');
-    expect(app).toContain('repository.deleteCanvas(canvas.id, canvas.revision)');
-    expect(app).toContain('CanvasRenameDialog');
-    expect(app).toContain('CanvasDeleteDialog');
-    expect(app).toContain('className="worldbuilding-create-icon" aria-label="Create new note" title="Create new note" onClick={createWorldbuildingNote}><Plus');
-    expect(app).toContain('className="worldbuilding-create-icon" aria-label="Create new canvas" title="Create new canvas" onClick={createWorldbuildingCanvas}><Plus');
+    expect(app).toContain('WorldbuildingTree');
+    expect(app).toContain('WorldbuildingCreateDialog');
+    expect(app).toContain('worldbuilding-file-tree');
+    expect(app).toContain('onDragStart');
+    expect(app).toContain('moveWorldbuildingEntry');
+    expect(app).toContain('FolderDeleteDialog');
+    expect(app).toContain('Delete folder and contents');
+    expect(app).toContain('worldbuildingTabKeysDeletedByFolder');
+    expect(app).toContain('deletedTabKeys');
+    expect(app).toContain('className="worldbuilding-create-button"');
     expect(readFileSync(join(process.cwd(), 'package.json'), 'utf8')).toContain('"lucide-react"');
     expect(readFileSync(join(process.cwd(), 'package.json'), 'utf8')).toContain('"@excalidraw/excalidraw": "0.18.1"');
     expect(readFileSync(join(process.cwd(), 'README.md'), 'utf8')).toContain('**0.18.1** package (MIT license');
