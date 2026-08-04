@@ -34,7 +34,7 @@ function worldbuildingTabKeysDeletedByFolder(snapshot: ProjectSnapshot, folderId
   ]);
 }
 import { documentText } from '../domain/manuscript-versions';
-import { readRecentProjects, rememberRecentProject, removeRecentProject, selectedProjectDirectory, validateProjectDirectory, type RecentProject } from '../domain/recent-projects';
+import { defaultProjectDirectory, isValidRecentProject, readRecentProjects, rememberRecentProject, removeRecentProject, selectedProjectDirectory, validateProjectDirectory, type RecentProject } from '../domain/recent-projects';
 import { HomePage } from './Home';
 import { open as openDirectory } from '@tauri-apps/plugin-dialog';
 import { SettingsPage } from './Settings';
@@ -271,15 +271,16 @@ function RestoreVersionDialog({ item, busy, onCancel, onConfirm, trigger }: { it
   </Modal>;
 }
 
-interface FormDialogConfig { eyebrow: string; title: string; fields: Array<{ key: string; label: string; value: string; placeholder?: string; type?: 'text' | 'number'; readOnly?: boolean }>; onSubmit: (values: Record<string, string>) => Promise<void>; onRetry?: () => void; retryLabel?: string; trigger?: FocusTrigger; }
+export interface FormDialogConfig { eyebrow: string; title: string; fields: Array<{ key: string; label: string; value: string; placeholder?: string; type?: 'text' | 'number'; readOnly?: boolean }>; onSubmit: (values: Record<string, string>) => Promise<void>; onRetry?: () => void; retryOnSubmit?: boolean; retryLabel?: string; trigger?: FocusTrigger; }
 
-function FormDialog({ config, busy, error, onCancel, onSubmit }: { config: FormDialogConfig; busy: boolean; error?: string; onCancel: () => void; onSubmit: (values: Record<string, string>) => void }) {
+export function FormDialog({ config, busy, error, onCancel, onSubmit }: { config: FormDialogConfig; busy: boolean; error?: string; onCancel: () => void; onSubmit: (values: Record<string, string>) => void }) {
   const [values, setValues] = useState(() => Object.fromEntries(config.fields.map((field) => [field.key, field.value])));
   useEffect(() => setValues(Object.fromEntries(config.fields.map((field) => [field.key, field.value]))), [config]);
+  const retry = config.onRetry ?? (config.retryOnSubmit ? () => onSubmit(values) : undefined);
   return <Modal eyebrow={config.eyebrow} title={config.title} onClose={onCancel} closeDisabled={busy} busy={busy} trigger={config.trigger}>
     <form onSubmit={(event) => { event.preventDefault(); onSubmit(values); }}>
       {config.fields.map((field) => <label className="modal-field" key={field.key}>{field.label}<input autoFocus={!field.readOnly && field.key === config.fields.find((candidate) => !candidate.readOnly)?.key} type={field.type ?? 'text'} value={values[field.key] ?? ''} placeholder={field.placeholder} required readOnly={field.readOnly} onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))} /></label>)}
-      {error && <div className="error-message" role="alert"><p>{error}</p>{config.onRetry && <button type="button" className="retry-button" disabled={busy} onClick={config.onRetry}>{config.retryLabel ?? 'Retry'}</button>}</div>}
+      {error && <div className="error-message" role="alert"><p>{error}</p>{retry && <button type="button" className="retry-button" disabled={busy} onClick={retry}>{config.retryLabel ?? 'Retry'}</button>}</div>}
       <div className="modal-actions"><button type="button" className="text-button" disabled={busy} onClick={onCancel}>Cancel</button><button type="submit" className="primary-button" disabled={busy}>Continue</button></div>
     </form>
   </Modal>;
@@ -784,11 +785,13 @@ export default function App() {
       { key: 'directory', label: 'Project folder', value: directory, readOnly: isDesktop },
       { key: 'name', label: 'Project name', value: 'My story' }
     ], trigger,
-    retryLabel: 'Choose another folder',
-    onRetry: () => void run(async () => {
-      const selected = await chooseDesktopProjectDirectory('Choose a folder for the new project');
-      if (selected) showCreateProjectForm(selected, trigger);
-    }),
+    ...(isDesktop ? {
+      retryLabel: 'Choose another folder',
+      onRetry: () => void run(async () => {
+        const selected = await chooseDesktopProjectDirectory('Choose a folder for the new project');
+        if (selected) showCreateProjectForm(selected, trigger);
+      })
+    } : { retryOnSubmit: true }),
     onSubmit: async (values) => {
       const projectDirectory = validateProjectDirectory(values.directory);
       const name = values.name.trim() || 'My story';
@@ -803,7 +806,7 @@ export default function App() {
     return void run(async () => {
       await autosave.flush();
       if (!isDesktop) {
-        showCreateProjectForm('/tmp/my-weave-project', trigger);
+        showCreateProjectForm(defaultProjectDirectory(), trigger);
         return;
       }
       try {
@@ -838,7 +841,7 @@ export default function App() {
     return void run(async () => {
       await autosave.flush();
       if (!isDesktop) {
-        setFormDialog({ eyebrow: 'OPEN PROJECT', title: 'Open a project', fields: [{ key: 'directory', label: 'Project directory', value: '', placeholder: '/path/to/project' }], trigger, onSubmit: async (values) => { const project = await repository.openProject(validateProjectDirectory(values.directory)); rememberProject(project); await refresh(false); applyRoute('home'); } });
+        setFormDialog({ eyebrow: 'OPEN PROJECT', title: 'Open a project', fields: [{ key: 'directory', label: 'Project directory', value: '', placeholder: '/path/to/project' }], trigger, retryOnSubmit: true, onSubmit: async (values) => { const project = await repository.openProject(validateProjectDirectory(values.directory)); rememberProject(project); await refresh(false); applyRoute('home'); } });
         return;
       }
       try {
@@ -1202,7 +1205,8 @@ export default function App() {
 
   if (route === 'ui') return <UiKit />;
 
-  if (!snapshot) return <><main className="welcome"><div className="welcome-card"><div className="welcome-card-top"><div className="mark">W</div><ThemeControl theme={theme} onToggle={() => setTheme(toggleTheme)} /></div><p className="eyebrow">OFFLINE DESKTOP WRITING</p><h1>Make room for the story.</h1><p className="welcome-copy">Weave keeps your manuscript, revisions, SQLite database, and recovery files in a visible <code>.weave</code> project directory. No server. No network. No guesswork.</p><div className="welcome-actions"><button type="button" className="primary-button" onClick={createProject} disabled={busy}>Create project</button><button type="button" className="secondary-button" onClick={openProject} disabled={busy}>Open project</button></div>{recentProjects.length > 0 && <section className="recent-projects" aria-labelledby="recent-projects-title"><div className="recent-projects-heading"><h2 id="recent-projects-title">Recent projects</h2><span>local only</span></div><ul>{recentProjects.map((project) => <li key={project.directory}><button type="button" className="recent-project-open" onClick={() => openProjectAt(project.directory, project.name)} disabled={busy}><strong>{project.name}</strong><small>{project.directory}</small></button><button type="button" className="recent-project-remove" onClick={() => forgetRecentProject(project.directory)} disabled={busy} aria-label={`Remove ${project.name} from recent projects`}>Remove</button></li>)}</ul></section>}{localError && <div className="error-message" role="alert"><p>{localError}</p>{projectPickerRetry && <button type="button" className="retry-button" onClick={() => projectPickerRetry === 'create' ? createProject() : openProject()}>Retry</button>}</div>}<p className="offline-note"><span className="status-dot" /> local-only · SQLite · revisioned</p></div></main>{formDialog && <FormDialog config={formDialog} busy={busy} error={localError} onCancel={() => { setFormDialog(undefined); setLocalError(''); }} onSubmit={submitFormDialog} />}</>;
+  const validRecentProjects = recentProjects.filter(isValidRecentProject);
+  if (!snapshot) return <><main className="welcome"><div className="welcome-card"><div className="welcome-card-top"><div className="mark">W</div><ThemeControl theme={theme} onToggle={() => setTheme(toggleTheme)} /></div><p className="eyebrow">OFFLINE DESKTOP WRITING</p><h1>Make room for the story.</h1><p className="welcome-copy">Weave keeps your manuscript, revisions, SQLite database, and recovery files in a visible <code>.weave</code> project directory. No server. No network. No guesswork.</p><div className="welcome-actions"><button type="button" className="primary-button" onClick={createProject} disabled={busy}>Create project</button><button type="button" className="secondary-button" onClick={openProject} disabled={busy}>Open project</button></div>{validRecentProjects.length > 0 && <section className="recent-projects" aria-labelledby="recent-projects-title"><div className="recent-projects-heading"><h2 id="recent-projects-title">Recent projects</h2><span>local only</span></div><ul>{validRecentProjects.map((project) => <li key={project.directory}><button type="button" className="recent-project-open" onClick={() => openProjectAt(project.directory, project.name)} disabled={busy}><strong>{project.name}</strong><small>{project.directory}</small></button><button type="button" className="recent-project-remove" onClick={() => forgetRecentProject(project.directory)} disabled={busy} aria-label={`Remove ${project.name} from recent projects`}>Remove</button></li>)}</ul></section>}{localError && <div className="error-message" role="alert"><p>{localError}</p>{projectPickerRetry && <button type="button" className="retry-button" onClick={() => projectPickerRetry === 'create' ? createProject() : openProject()}>Retry</button>}</div>}<p className="offline-note"><span className="status-dot" /> local-only · SQLite · revisioned</p></div></main>{formDialog && <FormDialog config={formDialog} busy={busy} error={localError} onCancel={() => { setFormDialog(undefined); setLocalError(''); }} onSubmit={submitFormDialog} />}</>;
 
   const activeChapter: Chapter | undefined = snapshot.chapters.find((chapter) => chapter.id === selectedChapterId);
   const activeScene = scenes.find((scene) => scene.id === selectedSceneId);

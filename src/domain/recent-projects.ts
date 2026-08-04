@@ -9,11 +9,25 @@ export interface RecentProject {
 
 export const RECENT_PROJECTS_STORAGE_KEY = 'weave.recent-projects.v1';
 const MAX_RECENT_PROJECTS = 12;
+export type ProjectDirectoryPlatform = 'unix' | 'windows';
 
-/** Validate the path syntax without probing the filesystem or following links. */
-export function validateProjectDirectory(value: string): string {
+/** Resolve the native path rules without probing the filesystem or following links. */
+export function projectDirectoryPlatform(): ProjectDirectoryPlatform {
+  if (typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent)) return 'windows';
+  if (typeof process !== 'undefined' && process.platform === 'win32') return 'windows';
+  return 'unix';
+}
+
+function isAbsoluteProjectDirectory(directory: string, platform: ProjectDirectoryPlatform): boolean {
+  if (platform === 'windows') return /^[a-zA-Z]:[\\/]/.test(directory) || /^\\\\[^\\/]+[\\/][^\\/]+/.test(directory);
+  return directory.startsWith('/');
+}
+
+/** Validate an absolute native directory path without reading it or following links. */
+export function validateProjectDirectory(value: string, platform = projectDirectoryPlatform()): string {
   const directory = value.trim();
   if (!directory) throw new Error('A project directory is required');
+  if (!isAbsoluteProjectDirectory(directory, platform)) throw new Error('Choose an absolute project directory');
   if ([...directory].some((character) => character.charCodeAt(0) < 0x20)) throw new Error('The project directory contains an invalid character');
   const segments = directory.split(/[\\/]+/).filter(Boolean);
   if (segments.some((segment) => segment === '.' || segment === '..')) {
@@ -29,6 +43,11 @@ export function validateProjectDirectory(value: string): string {
 export function selectedProjectDirectory(selection: string | string[] | null): string | undefined {
   if (!selection || Array.isArray(selection)) return undefined;
   return validateProjectDirectory(selection);
+}
+
+/** Browser-only fallback remains in-memory, but its metadata still uses an absolute native-form path. */
+export function defaultProjectDirectory(): string {
+  return projectDirectoryPlatform() === 'windows' ? 'C:\\weave\\my-weave-project' : '/tmp/my-weave-project';
 }
 
 function storage(): Storage | undefined {

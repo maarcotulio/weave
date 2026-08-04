@@ -1,16 +1,19 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { JSDOM } from 'jsdom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+const nativeDialog = vi.hoisted(() => ({ open: vi.fn() }));
+
 vi.mock('../app/Worldbuilding', () => ({
   WorldbuildingWorkspace: () => null,
   worldbuildingTabKey: (tab: { kind: string; id: string }) => `${tab.kind}:${tab.id}`
 }));
+vi.mock('@tauri-apps/plugin-dialog', () => ({ open: nativeDialog.open }));
 
 import { ImportChoiceDialog } from '../app/ImportChoiceDialog';
-import { MarkdownImportDialog } from '../app/App';
+import { FormDialog, MarkdownImportDialog, type FormDialogConfig } from '../app/App';
 
 let dom: JSDOM | undefined;
 let root: Root | undefined;
@@ -51,11 +54,23 @@ function MarkdownFailureHarness({ onRetry }: { onRetry: () => void }) {
   return <MarkdownImportDialog defaultTarget="scene" canImportScene canImportChapter busy={false} error={error} onCancel={() => undefined} onRetry={onRetry} onSubmit={() => setError('Could not save the imported scene.')} />;
 }
 
+function ProjectFormHarness({ desktop, onSubmit, onPickerRetry, onCancel }: { desktop: boolean; onSubmit: (values: Record<string, string>) => void; onPickerRetry: () => void; onCancel: () => void }) {
+  const [error, setError] = useState<string>();
+  const config = useMemo<FormDialogConfig>(() => ({
+    eyebrow: 'PROJECT', title: desktop ? 'Desktop project' : 'Web project',
+    fields: [{ key: 'directory', label: 'Project directory', value: '/tmp/project', readOnly: desktop }],
+    onSubmit: async () => undefined,
+    ...(desktop ? { retryLabel: 'Choose another folder', onRetry: onPickerRetry } : { retryOnSubmit: true })
+  }), [desktop, onPickerRetry]);
+  return <FormDialog config={config} busy={false} error={error} onCancel={onCancel} onSubmit={(values) => { onSubmit(values); setError('Project save failed'); }} />;
+}
+
 afterEach(async () => {
   if (root) await act(async () => { root?.unmount(); });
   dom?.window.close();
   dom = undefined;
   root = undefined;
+  nativeDialog.open.mockReset();
 });
 
 describe('interactive import dialogs', () => {
@@ -142,5 +157,37 @@ describe('interactive import dialogs', () => {
     await act(async () => { retryButton.click(); });
     expect(retry).not.toHaveBeenCalled();
     expect(cancelled).not.toHaveBeenCalled();
+  });
+
+  it('retries web project errors with the editable form and never opens the native picker', async () => {
+    installDom();
+    const submitted = vi.fn();
+    await render(<ProjectFormHarness desktop={false} onSubmit={submitted} onPickerRetry={vi.fn()} onCancel={vi.fn()} />);
+    const input = document.querySelector('[role="dialog"] input') as HTMLInputElement;
+    await act(async () => { input.value = '/tmp/edited-project'; input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); });
+    const submit = [...document.querySelectorAll('[role="dialog"] button')].find((button) => button.textContent === 'Continue')! as HTMLButtonElement;
+    await act(async () => { submit.click(); });
+    const retry = [...document.querySelectorAll('[role="alert"] button')].find((button) => button.textContent === 'Retry')! as HTMLButtonElement;
+    await act(async () => { retry.click(); });
+    expect(submitted).toHaveBeenNthCalledWith(1, { directory: '/tmp/edited-project' });
+    expect(submitted).toHaveBeenNthCalledWith(2, { directory: '/tmp/edited-project' });
+    expect(nativeDialog.open).not.toHaveBeenCalled();
+  });
+
+  it('uses a desktop picker retry instead of resubmitting and allows cancellation', async () => {
+    installDom();
+    const submitted = vi.fn();
+    const pickerRetry = vi.fn();
+    const cancelled = vi.fn();
+    await render(<ProjectFormHarness desktop onSubmit={submitted} onPickerRetry={pickerRetry} onCancel={cancelled} />);
+    const submit = [...document.querySelectorAll('[role="dialog"] button')].find((button) => button.textContent === 'Continue')! as HTMLButtonElement;
+    await act(async () => { submit.click(); });
+    const retry = [...document.querySelectorAll('[role="alert"] button')].find((button) => button.textContent === 'Choose another folder')! as HTMLButtonElement;
+    await act(async () => { retry.click(); });
+    const cancel = [...document.querySelectorAll('[role="dialog"] button')].find((button) => button.textContent === 'Cancel')! as HTMLButtonElement;
+    await act(async () => { cancel.click(); });
+    expect(submitted).toHaveBeenCalledTimes(1);
+    expect(pickerRetry).toHaveBeenCalledTimes(1);
+    expect(cancelled).toHaveBeenCalledTimes(1);
   });
 });
