@@ -131,6 +131,18 @@ export interface MarkdownNote {
   updatedAt: string;
 }
 
+/** A local planning file. Its Markdown is canonical and never changes manuscript structure. */
+export interface OutlineFile {
+  id: string;
+  projectId: string;
+  title: string;
+  markdown: string;
+  position: number;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface NoteLink {
   id: string;
   noteId: string;
@@ -340,6 +352,7 @@ export interface ProjectSnapshot {
   scenes: Scene[];
   continuousDrafts: ContinuousDraft[];
   worldbuildingFolders?: WorldbuildingFolder[];
+  outlineFiles?: OutlineFile[];
   markdownNotes: MarkdownNote[];
   noteLinks: NoteLink[];
   canvases: StoryCanvas[];

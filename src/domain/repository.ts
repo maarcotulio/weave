@@ -30,6 +30,7 @@ import {
   type EditorStyleProfile,
   EntityRevisionConflictError,
   type MarkdownNote,
+  type OutlineFile,
   type NoteLink,
   type StoryCanvas,
   type WorldbuildingFolder,
@@ -85,6 +86,8 @@ export interface SplitResult {
 
 export interface ProjectRepository {
   createProject(directory: string, name: string): Promise<Project>;
+  /** Desktop-only atomic import of an external folder with manuscript/outline/worldbuilding. */
+  importProjectDirectory(directory: string): Promise<Project>;
   openProject(directory: string): Promise<Project>;
   getProject(): Promise<Project>;
   createStory(title: string): Promise<Story>;
@@ -110,6 +113,10 @@ export interface ProjectRepository {
   moveWorldbuildingEntry(kind: WorldbuildingEntryKind, id: string, parentId?: string, position?: number): Promise<WorldbuildingEntry[]>;
   createMarkdownNote(title: string, markdown?: string): Promise<MarkdownNote>;
   updateMarkdownNote(noteId: string, input: { title: string; markdown: string }, expectedRevision: number): Promise<MarkdownNote>;
+  createOutlineFile(title: string, markdown?: string): Promise<OutlineFile>;
+  updateOutlineFile(fileId: string, input: { title: string; markdown: string }, expectedRevision: number): Promise<OutlineFile>;
+  deleteOutlineFile(fileId: string, expectedRevision: number): Promise<void>;
+  listOutlineFiles(): Promise<OutlineFile[]>;
   deleteMarkdownNote(noteId: string, expectedRevision: number, mode?: 'reject' | 'remove-references'): Promise<void>;
   listMarkdownNotes(): Promise<MarkdownNote[]>;
   searchMarkdownNotes(query: string): Promise<MarkdownNote[]>;
@@ -199,6 +206,7 @@ interface RepositoryState {
   canvasNodes: CanvasNode[];
   canvasEdges: CanvasEdge[];
   worldbuildingFolders: WorldbuildingFolder[];
+  outlineFiles: OutlineFile[];
   styleProfile: EditorStyleProfile;
   writingGoals: WritingGoals;
   manuscriptVersions: StoredManuscriptVersion[];
@@ -234,6 +242,7 @@ export class InMemoryProjectRepository implements ProjectRepository {
     canvasNodes: [],
     canvasEdges: [],
     worldbuildingFolders: [],
+    outlineFiles: [],
     styleProfile: { ...DEFAULT_EDITOR_STYLE },
     writingGoals: { dailyTarget: 500, dailyWordCounts: {} },
     manuscriptVersions: [],
@@ -242,12 +251,16 @@ export class InMemoryProjectRepository implements ProjectRepository {
   protected backupStates = new Map<string, RepositoryState>();
 
   async createProject(directory: string, name: string): Promise<Project> {
-    this.state = { stories: [], chapters: [], sceneSets: [], scenes: [], documents: [], drafts: [], backups: [], worldbuildingItems: [], relationships: [], documentLinks: [], markdownNotes: [], noteLinks: [], canvases: [], canvasNodes: [], canvasEdges: [], worldbuildingFolders: [], styleProfile: { ...DEFAULT_EDITOR_STYLE }, writingGoals: { dailyTarget: 500, dailyWordCounts: {} }, manuscriptVersions: [], status: initialStatus() };
+    this.state = { stories: [], chapters: [], sceneSets: [], scenes: [], documents: [], drafts: [], backups: [], worldbuildingItems: [], relationships: [], documentLinks: [], markdownNotes: [], noteLinks: [], canvases: [], canvasNodes: [], canvasEdges: [], worldbuildingFolders: [], outlineFiles: [], styleProfile: { ...DEFAULT_EDITOR_STYLE }, writingGoals: { dailyTarget: 500, dailyWordCounts: {} }, manuscriptVersions: [], status: initialStatus() };
     this.backupStates.clear();
-    const project: Project = { id: newId('project'), name, directory, schemaVersion: 6, createdAt: now(), updatedAt: now() };
+    const project: Project = { id: newId('project'), name, directory, schemaVersion: 7, createdAt: now(), updatedAt: now() };
     this.state.project = project;
     this.state.status = { state: 'saved', message: 'Project created', at: now() };
     return deepClone(project);
+  }
+
+  async importProjectDirectory(_directory: string): Promise<Project> {
+    throw new Error('Project-folder import requires the desktop filesystem adapter');
   }
 
   async openProject(directory: string): Promise<Project> {
@@ -672,6 +685,35 @@ export class InMemoryProjectRepository implements ProjectRepository {
     this.state.status = { state: 'saved', message: 'Markdown note and deterministic links saved', at: now() };
     return deepClone(note);
   }
+
+  async createOutlineFile(title: string, markdown = ''): Promise<OutlineFile> {
+    const project = await this.getProject();
+    if (!title.trim()) throw new Error('An outline file title is required');
+    const file: OutlineFile = { id: newId('outline-file'), projectId: project.id, title: title.trim(), markdown, position: this.state.outlineFiles.length, revision: 1, createdAt: now(), updatedAt: now() };
+    this.state.outlineFiles.push(file);
+    this.touchProject();
+    this.state.status = { state: 'saved', message: 'Outline file saved', at: now() };
+    return deepClone(file);
+  }
+
+  async updateOutlineFile(fileId: string, input: { title: string; markdown: string }, expectedRevision: number): Promise<OutlineFile> {
+    const file = this.requireOutlineFile(fileId);
+    if (file.revision !== expectedRevision) throw this.entityConflict(file.id, expectedRevision, file.revision);
+    if (!input.title.trim()) throw new Error('An outline file title is required');
+    file.title = input.title.trim(); file.markdown = input.markdown; file.revision += 1; file.updatedAt = now();
+    this.touchProject(); this.state.status = { state: 'saved', message: 'Outline file saved', at: now() };
+    return deepClone(file);
+  }
+
+  async deleteOutlineFile(fileId: string, expectedRevision: number): Promise<void> {
+    const file = this.requireOutlineFile(fileId);
+    if (file.revision !== expectedRevision) throw this.entityConflict(file.id, expectedRevision, file.revision);
+    this.state.outlineFiles = this.state.outlineFiles.filter((candidate) => candidate.id !== fileId);
+    this.state.outlineFiles.forEach((candidate, position) => { candidate.position = position; });
+    this.touchProject(); this.state.status = { state: 'saved', message: `Outline file “${file.title}” deleted`, at: now() };
+  }
+
+  async listOutlineFiles(): Promise<OutlineFile[]> { return deepClone(this.state.outlineFiles.slice().sort((a, b) => a.position - b.position)); }
 
   async deleteMarkdownNote(noteId: string, expectedRevision: number, mode: 'reject' | 'remove-references' = 'reject'): Promise<void> {
     const note = this.requireMarkdownNote(noteId);
@@ -1105,6 +1147,7 @@ export class InMemoryProjectRepository implements ProjectRepository {
       scenes: deepClone(this.state.scenes),
       continuousDrafts: deepClone(this.state.drafts),
       worldbuildingFolders: deepClone(this.state.worldbuildingFolders),
+      outlineFiles: deepClone(this.state.outlineFiles),
       markdownNotes: deepClone(this.state.markdownNotes),
       noteLinks: deepClone(this.state.noteLinks),
       canvases: deepClone(this.state.canvases.map((canvas) => this.normalizeCanvas(canvas))),
@@ -1148,6 +1191,12 @@ export class InMemoryProjectRepository implements ProjectRepository {
     const record = { id, headRevision: 1, revisions: [revision] };
     this.state.documents.push(record);
     return record;
+  }
+
+  protected requireOutlineFile(fileId: string): OutlineFile {
+    const file = this.state.outlineFiles.find((candidate) => candidate.id === fileId);
+    if (!file) throw new Error(`Unknown outline file ${fileId}`);
+    return file;
   }
 
   protected requireWorldbuildingFolder(folderId: string): WorldbuildingFolder {
