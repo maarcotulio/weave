@@ -271,13 +271,15 @@ function RestoreVersionDialog({ item, busy, onCancel, onConfirm, trigger }: { it
   </Modal>;
 }
 
-interface FormDialogConfig { eyebrow: string; title: string; fields: Array<{ key: string; label: string; value: string; placeholder?: string; type?: 'text' | 'number' }>; onSubmit: (values: Record<string, string>) => Promise<void>; trigger?: FocusTrigger; }
+interface FormDialogConfig { eyebrow: string; title: string; fields: Array<{ key: string; label: string; value: string; placeholder?: string; type?: 'text' | 'number'; readOnly?: boolean }>; onSubmit: (values: Record<string, string>) => Promise<void>; onRetry?: () => void; retryLabel?: string; trigger?: FocusTrigger; }
 
-function FormDialog({ config, busy, onCancel, onSubmit }: { config: FormDialogConfig; busy: boolean; onCancel: () => void; onSubmit: (values: Record<string, string>) => void }) {
+function FormDialog({ config, busy, error, onCancel, onSubmit }: { config: FormDialogConfig; busy: boolean; error?: string; onCancel: () => void; onSubmit: (values: Record<string, string>) => void }) {
   const [values, setValues] = useState(() => Object.fromEntries(config.fields.map((field) => [field.key, field.value])));
+  useEffect(() => setValues(Object.fromEntries(config.fields.map((field) => [field.key, field.value]))), [config]);
   return <Modal eyebrow={config.eyebrow} title={config.title} onClose={onCancel} closeDisabled={busy} busy={busy} trigger={config.trigger}>
     <form onSubmit={(event) => { event.preventDefault(); onSubmit(values); }}>
-      {config.fields.map((field) => <label className="modal-field" key={field.key}>{field.label}<input autoFocus={field.key === config.fields[0]?.key} type={field.type ?? 'text'} value={values[field.key] ?? ''} placeholder={field.placeholder} required onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))} /></label>)}
+      {config.fields.map((field) => <label className="modal-field" key={field.key}>{field.label}<input autoFocus={!field.readOnly && field.key === config.fields.find((candidate) => !candidate.readOnly)?.key} type={field.type ?? 'text'} value={values[field.key] ?? ''} placeholder={field.placeholder} required readOnly={field.readOnly} onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))} /></label>)}
+      {error && <div className="error-message" role="alert"><p>{error}</p>{config.onRetry && <button type="button" className="retry-button" disabled={busy} onClick={config.onRetry}>{config.retryLabel ?? 'Retry'}</button>}</div>}
       <div className="modal-actions"><button type="button" className="text-button" disabled={busy} onClick={onCancel}>Cancel</button><button type="submit" className="primary-button" disabled={busy}>Continue</button></div>
     </form>
   </Modal>;
@@ -521,6 +523,7 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState('');
+  const [projectPickerRetry, setProjectPickerRetry] = useState<'create' | 'open'>();
   const [autosaveStatus, setAutosaveStatus] = useState<AutosaveStatus>({ state: 'saved', message: 'All changes saved' });
   const [integrityReport, setIntegrityReport] = useState<IntegrityReport>();
   const [lastBackup, setLastBackup] = useState<BackupRecord>();
@@ -775,39 +778,85 @@ export default function App() {
     }
   });
 
+  const chooseDesktopProjectDirectory = async (title: string): Promise<string | undefined> => {
+    const directory = await openDirectory({ directory: true, multiple: false, title });
+    if (!directory || Array.isArray(directory)) return undefined;
+    return validateProjectDirectory(directory);
+  };
+  const showCreateProjectForm = (directory: string, trigger?: FocusTrigger) => setFormDialog({
+    eyebrow: 'NEW PROJECT', title: 'Create a project', fields: [
+      { key: 'directory', label: 'Project folder', value: directory, readOnly: isDesktop },
+      { key: 'name', label: 'Project name', value: 'My story' }
+    ], trigger,
+    retryLabel: 'Choose another folder',
+    onRetry: () => void run(async () => {
+      const selected = await chooseDesktopProjectDirectory('Choose a folder for the new project');
+      if (selected) showCreateProjectForm(selected, trigger);
+    }),
+    onSubmit: async (values) => {
+      const projectDirectory = validateProjectDirectory(values.directory);
+      const name = values.name.trim() || 'My story';
+      const project = await repository.createProject(projectDirectory, name);
+      rememberProject(project);
+      await refresh(false);
+      applyRoute('home');
+    }
+  });
   const createProject = () => {
     const trigger = captureFocusTrigger();
     return void run(async () => {
       await autosave.flush();
-      setFormDialog({ eyebrow: 'NEW PROJECT', title: 'Create a project', fields: [
-        { key: 'directory', label: 'Project directory', value: `${isDesktop ? '' : '/tmp/'}my-weave-project` },
-        { key: 'name', label: 'Project name', value: 'My story' }
-      ], trigger, onSubmit: async (values) => {
-        const directory = validateProjectDirectory(values.directory);
-        const name = values.name.trim() || 'My story';
-        const project = await repository.createProject(directory, name);
-        rememberProject(project);
-        await refresh(false);
-        applyRoute('home');
-      } });
+      if (!isDesktop) {
+        showCreateProjectForm('/tmp/my-weave-project', trigger);
+        return;
+      }
+      try {
+        const directory = await chooseDesktopProjectDirectory('Choose a folder for the new project');
+        if (directory) showCreateProjectForm(directory, trigger);
+      } catch (error) {
+        setProjectPickerRetry('create');
+        throw error;
+      }
     });
   };
   const openProjectAt = (directory: string, recentName?: string) => void run(async () => {
-    await autosave.flush();
-    const validatedDirectory = validateProjectDirectory(directory);
-    // The browser fallback has no filesystem to reopen. Recent entries are
-    // intentionally metadata-only, so create an in-memory shell from that
-    // metadata rather than pretending localStorage contains project content.
-    const project = !isDesktop && recentName
-      ? await repository.createProject(validatedDirectory, recentName)
-      : await repository.openProject(validatedDirectory);
-    rememberProject(project);
-    await refresh(false);
-    applyRoute('home');
+    try {
+      await autosave.flush();
+      const validatedDirectory = validateProjectDirectory(directory);
+      // The browser fallback has no filesystem to reopen. Recent entries are
+      // intentionally metadata-only, so create an in-memory shell from that
+      // metadata rather than pretending localStorage contains project content.
+      const project = !isDesktop && recentName
+        ? await repository.createProject(validatedDirectory, recentName)
+        : await repository.openProject(validatedDirectory);
+      rememberProject(project);
+      await refresh(false);
+      applyRoute('home');
+    } catch (error) {
+      if (isDesktop) setProjectPickerRetry('open');
+      throw error;
+    }
   });
   const openProject = () => {
     const trigger = captureFocusTrigger();
-    return void run(async () => { await autosave.flush(); setFormDialog({ eyebrow: 'OPEN PROJECT', title: 'Open a project', fields: [{ key: 'directory', label: 'Project directory', value: '', placeholder: '/path/to/project' }], trigger, onSubmit: async (values) => { const project = await repository.openProject(validateProjectDirectory(values.directory)); rememberProject(project); await refresh(false); applyRoute('home'); } }); });
+    return void run(async () => {
+      await autosave.flush();
+      if (!isDesktop) {
+        setFormDialog({ eyebrow: 'OPEN PROJECT', title: 'Open a project', fields: [{ key: 'directory', label: 'Project directory', value: '', placeholder: '/path/to/project' }], trigger, onSubmit: async (values) => { const project = await repository.openProject(validateProjectDirectory(values.directory)); rememberProject(project); await refresh(false); applyRoute('home'); } });
+        return;
+      }
+      try {
+        const directory = await chooseDesktopProjectDirectory('Choose a Weave project folder to open');
+        if (!directory) return;
+        const project = await repository.openProject(directory);
+        rememberProject(project);
+        await refresh(false);
+        applyRoute('home');
+      } catch (error) {
+        setProjectPickerRetry('open');
+        throw error;
+      }
+    });
   };
   const forgetRecentProject = (directory: string) => setRecentProjects(removeRecentProject(directory));
   const openImportChoices = () => setImportChoiceDialog({ trigger: captureFocusTrigger() });
@@ -1157,7 +1206,7 @@ export default function App() {
 
   if (route === 'ui') return <UiKit />;
 
-  if (!snapshot) return <><main className="welcome"><div className="welcome-card"><div className="welcome-card-top"><div className="mark">W</div><ThemeControl theme={theme} onToggle={() => setTheme(toggleTheme)} /></div><p className="eyebrow">OFFLINE DESKTOP WRITING</p><h1>Make room for the story.</h1><p className="welcome-copy">Weave keeps your manuscript, revisions, SQLite database, and recovery files in a visible <code>.weave</code> project directory. No server. No network. No guesswork.</p><div className="welcome-actions"><button type="button" className="primary-button" onClick={createProject} disabled={busy}>Create project</button><button type="button" className="secondary-button" onClick={openProject} disabled={busy}>Open project</button></div>{recentProjects.length > 0 && <section className="recent-projects" aria-labelledby="recent-projects-title"><div className="recent-projects-heading"><h2 id="recent-projects-title">Recent projects</h2><span>local only</span></div><ul>{recentProjects.map((project) => <li key={project.directory}><button type="button" className="recent-project-open" onClick={() => openProjectAt(project.directory, project.name)} disabled={busy}><strong>{project.name}</strong><small>{project.directory}</small></button><button type="button" className="recent-project-remove" onClick={() => forgetRecentProject(project.directory)} disabled={busy} aria-label={`Remove ${project.name} from recent projects`}>Remove</button></li>)}</ul></section>}{localError && <p className="error-message">{localError}</p>}<p className="offline-note"><span className="status-dot" /> local-only · SQLite · revisioned</p></div></main>{formDialog && <FormDialog config={formDialog} busy={busy} onCancel={() => setFormDialog(undefined)} onSubmit={submitFormDialog} />}</>;
+  if (!snapshot) return <><main className="welcome"><div className="welcome-card"><div className="welcome-card-top"><div className="mark">W</div><ThemeControl theme={theme} onToggle={() => setTheme(toggleTheme)} /></div><p className="eyebrow">OFFLINE DESKTOP WRITING</p><h1>Make room for the story.</h1><p className="welcome-copy">Weave keeps your manuscript, revisions, SQLite database, and recovery files in a visible <code>.weave</code> project directory. No server. No network. No guesswork.</p><div className="welcome-actions"><button type="button" className="primary-button" onClick={createProject} disabled={busy}>Create project</button><button type="button" className="secondary-button" onClick={openProject} disabled={busy}>Open project</button></div>{recentProjects.length > 0 && <section className="recent-projects" aria-labelledby="recent-projects-title"><div className="recent-projects-heading"><h2 id="recent-projects-title">Recent projects</h2><span>local only</span></div><ul>{recentProjects.map((project) => <li key={project.directory}><button type="button" className="recent-project-open" onClick={() => openProjectAt(project.directory, project.name)} disabled={busy}><strong>{project.name}</strong><small>{project.directory}</small></button><button type="button" className="recent-project-remove" onClick={() => forgetRecentProject(project.directory)} disabled={busy} aria-label={`Remove ${project.name} from recent projects`}>Remove</button></li>)}</ul></section>}{localError && <div className="error-message" role="alert"><p>{localError}</p>{projectPickerRetry && <button type="button" className="retry-button" onClick={() => projectPickerRetry === 'create' ? createProject() : openProject()}>Retry</button>}</div>}<p className="offline-note"><span className="status-dot" /> local-only · SQLite · revisioned</p></div></main>{formDialog && <FormDialog config={formDialog} busy={busy} error={localError} onCancel={() => { setFormDialog(undefined); setLocalError(''); }} onSubmit={submitFormDialog} />}</>;
 
   const activeChapter: Chapter | undefined = snapshot.chapters.find((chapter) => chapter.id === selectedChapterId);
   const activeScene = scenes.find((scene) => scene.id === selectedSceneId);
@@ -1182,7 +1231,7 @@ export default function App() {
     {importChoiceDialog && <ImportChoiceDialog busy={busy} folderAvailable={isDesktop} trigger={importChoiceDialog.trigger} onCancel={() => setImportChoiceDialog(undefined)} onChooseFolder={chooseProjectFolderImport} onChooseMarkdown={chooseMarkdownImport} />}
     {projectFolderImportDialog && <ProjectFolderImportDialog busy={busy} error={localError} trigger={projectFolderImportDialog.trigger} onCancel={() => { setProjectFolderImportDialog(undefined); setLocalError(''); }} onChoose={chooseProjectFolder} />}
     {markdownImportDialog && <MarkdownImportDialog defaultTarget={markdownImportDialog.defaultTarget} canImportScene={Boolean(selectedChapterId)} canImportChapter={Boolean(selectedStoryId)} busy={busy} error={markdownImportDialog.error} trigger={markdownImportDialog.trigger} onCancel={() => setMarkdownImportDialog(undefined)} onRetry={markdownImportDialog.retry ? () => importMarkdownFiles(markdownImportDialog.retry!.files, markdownImportDialog.retry!.target) : undefined} onSubmit={importMarkdownFiles} />}
-    {formDialog && <FormDialog config={formDialog} busy={busy} onCancel={() => setFormDialog(undefined)} onSubmit={submitFormDialog} />}
+    {formDialog && <FormDialog config={formDialog} busy={busy} error={localError} onCancel={() => { setFormDialog(undefined); setLocalError(''); }} onSubmit={submitFormDialog} />}
     {worldbuildingCreateDialog && <WorldbuildingCreateDialog busy={busy} trigger={worldbuildingCreateDialog.trigger} onCancel={() => setWorldbuildingCreateDialog(undefined)} onChoice={(choice) => choice === 'note' ? createWorldbuildingNote(worldbuildingCreateDialog.trigger) : choice === 'canvas' ? createWorldbuildingCanvas(worldbuildingCreateDialog.trigger) : createWorldbuildingFolder(worldbuildingCreateDialog.trigger)} />}
     {noteCreateDialog && <NoteCreateDialog busy={busy} onCancel={() => setNoteCreateDialog(undefined)} onSubmit={submitNoteCreate} trigger={noteCreateDialog.trigger} />}
     {folderCreateDialog && <FolderCreateDialog busy={busy} onCancel={() => setFolderCreateDialog(undefined)} onSubmit={submitFolderCreate} trigger={folderCreateDialog.trigger} />}

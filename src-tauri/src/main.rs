@@ -215,6 +215,7 @@ impl AppState {
 
 fn validate_project_root(root: &Path) -> Result<(), String> {
     if root.as_os_str().is_empty() { return Err("A project directory is required".into()); }
+    if !root.is_absolute() { return Err("Choose an absolute project directory with the folder picker".into()); }
     if root.to_string_lossy().contains('\0') { return Err("The project directory contains an invalid character".into()); }
     for component in root.components() {
         match component {
@@ -725,9 +726,7 @@ fn stage_project_store(root: &Path, store: &Store) -> Result<(), String> {
     result
 }
 
-#[tauri::command]
-fn create_project(directory: String, name: String, app: State<'_, Mutex<AppState>>) -> Result<Project, String> {
-    let mut state = app.lock().map_err(|_| "Project lock poisoned")?;
+fn create_new_project(directory: String, name: String, state: &mut AppState) -> Result<Project, String> {
     let root = PathBuf::from(directory.trim());
     let directory = normalized_project_directory(&root)?;
     let project = Project { id: id("project"), name, directory, schema_version: 7, created_at: timestamp(), updated_at: timestamp() };
@@ -738,6 +737,12 @@ fn create_project(directory: String, name: String, app: State<'_, Mutex<AppState
     state.root = Some(root);
     state.store = store;
     Ok(project)
+}
+
+#[tauri::command]
+fn create_project(directory: String, name: String, app: State<'_, Mutex<AppState>>) -> Result<Project, String> {
+    let mut state = app.lock().map_err(|_| "Project lock poisoned")?;
+    create_new_project(directory, name, &mut state)
 }
 
 fn open_existing_project(directory: String, state: &mut AppState) -> Result<Project, String> {
@@ -1174,6 +1179,36 @@ mod tests {
     fn normalizes_project_directory_without_accepting_traversal() {
         assert_eq!(normalized_project_directory(Path::new("/tmp//weave-project")).unwrap(), "/tmp/weave-project");
         assert!(normalized_project_directory(Path::new("/tmp/weave-project/../other")).is_err());
+    }
+
+    #[test]
+    fn create_project_publishes_and_reopens_the_selected_absolute_directory() {
+        let root = std::env::temp_dir().join(format!("weave-create-reopen-{}", Uuid::new_v4()));
+        let mut created_state = AppState::default();
+
+        let project = create_new_project(root.to_string_lossy().into_owned(), "Selected folder".into(), &mut created_state).unwrap();
+
+        assert_eq!(created_state.root.as_deref(), Some(root.as_path()));
+        assert!(root.join(".weave/project.db").is_file());
+        assert!(root.join(".weave/files/latest.json").is_file());
+        let story = Story { id: "story-after-create".into(), project_id: project.id.clone(), title: "Saved story".into(), position: 0 };
+        created_state.store.stories.push(story.clone());
+        created_state.persist().unwrap();
+
+        let mut reopened_state = AppState::default();
+        let reopened = open_existing_project(root.to_string_lossy().into_owned(), &mut reopened_state).unwrap();
+        assert_eq!(reopened.id, project.id);
+        assert_eq!(reopened_state.store.stories[0].id, story.id);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_relative_project_directory_without_creating_storage() {
+        let relative = format!("weave-relative-{}", Uuid::new_v4());
+        let error = create_new_project(relative.clone(), "Relative".into(), &mut AppState::default()).unwrap_err();
+
+        assert!(error.contains("absolute project directory"));
+        assert!(!Path::new(&relative).exists());
     }
 
     #[test]
