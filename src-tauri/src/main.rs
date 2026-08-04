@@ -680,11 +680,65 @@ fn import_project_directory(directory: String, app: State<'_, Mutex<AppState>>) 
     for (position, (_, relative)) in world_dirs.into_iter().enumerate() { let parent_path = relative.rsplit_once('/').map(|(parent, _)| parent); let parent_id = parent_path.and_then(|parent| folder_ids.get(parent).cloned()); let title = relative.rsplit('/').next().unwrap_or(&relative).to_string(); let folder = WorldbuildingFolder { id: id("world-folder"), project_id: project.id.clone(), title, parent_id, position: position as i64, created_at: timestamp(), updated_at: timestamp() }; folder_ids.insert(relative, folder.id.clone()); store.worldbuilding_folders.push(folder); }
     for (position, (path, relative)) in world_files.into_iter().enumerate() { let title = import_title(relative.rsplit('/').next().unwrap_or(&relative))?; let markdown = read_import_markdown(&path, &root, &format!("worldbuilding {relative}"))?; let parent = relative.rsplit_once('/').and_then(|(parent, _)| folder_ids.get(parent).cloned()); store.markdown_notes.push(MarkdownNote { id: id("note"), project_id: project.id.clone(), title, markdown, folder_id: parent, position: position as i64, revision: 1, created_at: timestamp(), updated_at: timestamp() }); }
     let notes = store.markdown_notes.clone(); for note in notes { store.note_links.extend(rebuild_note_links(&store, &note, &[])); }
-    let cleanup_root = root.clone(); let mut state = app.lock().map_err(|_| "Project lock poisoned")?; if let Err(error) = database_for(&root, true) { return Err(error); } state.root = Some(root); state.store = store; status(&mut state, "saved", "Project folder imported"); if let Err(error) = state.persist() { state.root = None; state.store = Store::default(); let _ = fs::remove_dir_all(cleanup_root.join(".weave")); return Err(error); } Ok(project)
+    let cleanup_root = root.clone();
+    let mut state = app.lock().map_err(|_| "Project lock poisoned")?;
+    if let Err(error) = database_for(&root, true) {
+        cleanup_new_project_storage(&cleanup_root);
+        return Err(error);
+    }
+    let previous_root = state.root.clone();
+    let previous_store = state.store.clone();
+    state.root = Some(root);
+    state.store = store;
+    status(&mut state, "saved", "Project folder imported");
+    if let Err(error) = state.persist() {
+        state.root = previous_root;
+        state.store = previous_store;
+        cleanup_new_project_storage(&cleanup_root);
+        return Err(format!("Could not initialize the imported project store: {error}"));
+    }
+    Ok(project)
+}
+
+fn cleanup_new_project_storage(root: &Path) {
+    let weave = root.join(".weave");
+    if let Ok(metadata) = fs::symlink_metadata(&weave) {
+        if metadata.is_dir() && !metadata.file_type().is_symlink() {
+            let _ = fs::remove_dir_all(weave);
+        }
+    }
 }
 
 #[tauri::command]
-fn create_project(directory: String, name: String, app: State<'_, Mutex<AppState>>) -> Result<Project, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let root = PathBuf::from(directory.trim()); let directory = normalized_project_directory(&root)?; let _ = database_for(&root, true)?; state.root = Some(root); let project = Project { id: id("project"), name, directory, schema_version: 7, created_at: timestamp(), updated_at: timestamp() };  state.store = Store::default(); state.store.project = Some(project.clone()); status(&mut state, "saved", "Project created offline"); state.persist()?; Ok(project) }
+fn create_project(directory: String, name: String, app: State<'_, Mutex<AppState>>) -> Result<Project, String> {
+    let mut state = app.lock().map_err(|_| "Project lock poisoned")?;
+    let root = PathBuf::from(directory.trim());
+    let directory = normalized_project_directory(&root)?;
+    let weave = root.join(".weave");
+    match fs::symlink_metadata(&weave) {
+        Ok(_) => return Err("The selected directory already contains .weave; open the existing project instead".into()),
+        Err(error) if error.kind() == ErrorKind::NotFound => {},
+        Err(error) => return Err(format!("Cannot inspect project storage: {error}")),
+    }
+    if let Err(error) = database_for(&root, true) {
+        cleanup_new_project_storage(&root);
+        return Err(error);
+    }
+    let previous_root = state.root.clone();
+    let previous_store = state.store.clone();
+    let project = Project { id: id("project"), name, directory, schema_version: 7, created_at: timestamp(), updated_at: timestamp() };
+    state.root = Some(root.clone());
+    state.store = Store::default();
+    state.store.project = Some(project.clone());
+    status(&mut state, "saved", "Project created offline");
+    if let Err(error) = state.persist() {
+        state.root = previous_root;
+        state.store = previous_store;
+        cleanup_new_project_storage(&root);
+        return Err(format!("Could not initialize the local project store: {error}"));
+    }
+    Ok(project)
+}
 
 fn open_existing_project(directory: String, state: &mut AppState) -> Result<Project, String> {
     let root = PathBuf::from(directory.trim());
@@ -702,8 +756,17 @@ fn open_existing_project(directory: String, state: &mut AppState) -> Result<Proj
     store.canvas_nodes.retain(|node| note_ids.contains(&node.entity_id)); store.canvas_edges.clear();
     let project = store.project.clone().ok_or_else(|| "Project metadata is missing".to_string())?;
     if normalized_project_directory(Path::new(&project.directory))? != normalized_project_directory(&root)? { return Err("Project metadata does not match the selected directory".into()); }
-    state.store = store; state.root = Some(root);
-    status(state, "saved", "Project opened offline"); state.persist()?; Ok(project)
+    let previous_root = state.root.clone();
+    let previous_store = state.store.clone();
+    state.store = store;
+    state.root = Some(root);
+    status(state, "saved", "Project opened offline");
+    if let Err(error) = state.persist() {
+        state.root = previous_root;
+        state.store = previous_store;
+        return Err(format!("Could not open the local project store: {error}"));
+    }
+    Ok(project)
 }
 
 #[tauri::command]
@@ -1119,7 +1182,7 @@ mod tests {
         let db = database_for(&root, true).unwrap();
         let connection = Connection::open(&db).unwrap();
         let versions: Vec<i64> = connection.prepare("SELECT version FROM schema_migrations ORDER BY version").unwrap().query_map([], |row| row.get(0)).unwrap().map(|row| row.unwrap()).collect();
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7]);
         let error = database_for(&root, true).unwrap_err();
         assert!(error.contains("already exists"));
         let _ = fs::remove_dir_all(root);

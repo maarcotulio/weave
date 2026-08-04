@@ -14,7 +14,7 @@ describe('Markdown import action', () => {
       flushMarkdownNote: async () => true,
       onOpen: () => undefined
     }));
-    expect(markup).toBe('<button type="button">Import .md</button>');
+    expect(markup).toBe('<button type="button">Import</button>');
   });
 
   it('uses busy as its only disabled restriction', () => {
@@ -25,7 +25,7 @@ describe('Markdown import action', () => {
       flushMarkdownNote: async () => true,
       onOpen: () => undefined
     }));
-    expect(markup).toBe('<button type="button" disabled="">Import .md</button>');
+    expect(markup).toBe('<button type="button" disabled="">Import</button>');
   });
 
   it('flushes a dirty Markdown note only when the user opens import and leaves the dialog closed on flush failure', async () => {
