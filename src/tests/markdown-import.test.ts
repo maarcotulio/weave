@@ -70,17 +70,17 @@ describe('deterministic Markdown import', () => {
     expect(head.document.blocks[0].kind).toBe('heading');
   });
 
-  it('persists imported Markdown notes and original source through SQLite', async () => {
+  it('persists manually created Markdown notes and original source through SQLite', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'weave-markdown-import-'));
     temporaryDirectories.push(directory);
     const repository = new SQLiteProjectRepository(directory);
     await repository.createProject(directory, 'Import');
     const source = '# Canonical\n\n[[Other]]';
-    const note = await repository.createMarkdownNote(markdownTitleFromFilename('world.md'), source);
+    const note = await repository.createMarkdownNote('World', source);
     repository.close();
     const reopened = new SQLiteProjectRepository(directory);
     await reopened.openProject(directory);
-    expect((await reopened.listMarkdownNotes()).find((item) => item.id === note.id)).toMatchObject({ title: 'world', markdown: source });
+    expect((await reopened.listMarkdownNotes()).find((item) => item.id === note.id)).toMatchObject({ title: 'World', markdown: source });
     reopened.close();
   });
 });
