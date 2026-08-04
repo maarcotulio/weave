@@ -597,9 +597,7 @@ fn compose(store: &Store, chapter_id: &str) -> Result<Document, String> { let cu
 #[tauri::command]
 fn create_project(directory: String, name: String, app: State<'_, Mutex<AppState>>) -> Result<Project, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let root = PathBuf::from(directory.trim()); let directory = normalized_project_directory(&root)?; let _ = database_for(&root, true)?; state.root = Some(root); let project = Project { id: id("project"), name, directory, schema_version: 6, created_at: timestamp(), updated_at: timestamp() };  state.store = Store::default(); state.store.project = Some(project.clone()); status(&mut state, "saved", "Project created offline"); state.persist()?; Ok(project) }
 
-#[tauri::command]
-fn open_project(directory: String, app: State<'_, Mutex<AppState>>) -> Result<Project, String> {
-    let mut state = app.lock().map_err(|_| "Project lock poisoned")?;
+fn open_existing_project(directory: String, state: &mut AppState) -> Result<Project, String> {
     let root = PathBuf::from(directory.trim());
     validate_project_root(&root)?;
     ensure_existing_directory(&root, "project directory")?;
@@ -616,7 +614,13 @@ fn open_project(directory: String, app: State<'_, Mutex<AppState>>) -> Result<Pr
     let project = store.project.clone().ok_or_else(|| "Project metadata is missing".to_string())?;
     if normalized_project_directory(Path::new(&project.directory))? != normalized_project_directory(&root)? { return Err("Project metadata does not match the selected directory".into()); }
     state.store = store; state.root = Some(root);
-    status(&mut state, "saved", "Project opened offline"); state.persist()?; Ok(project)
+    status(state, "saved", "Project opened offline"); state.persist()?; Ok(project)
+}
+
+#[tauri::command]
+fn open_project(directory: String, app: State<'_, Mutex<AppState>>) -> Result<Project, String> {
+    let mut state = app.lock().map_err(|_| "Project lock poisoned")?;
+    open_existing_project(directory, &mut state)
 }
 #[tauri::command]
 fn get_project(app: State<'_, Mutex<AppState>>) -> Result<Project, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; state.store.project.clone().ok_or_else(|| "No project is open".into()) }
@@ -1059,6 +1063,53 @@ mod tests {
         assert_eq!(ordered.iter().map(|scene| scene.id.as_str()).collect::<Vec<_>>(), vec!["third", "second", "first"]);
         assert_eq!(scenes.iter().filter(|scene| scene.scene_set_id == "set").map(|scene| scene.position).collect::<Vec<_>>(), vec![2, 1, 0]);
         assert_eq!(scenes.iter().find(|scene| scene.id == "other-set").unwrap().position, 0);
+    }
+
+    #[test]
+    fn reopens_persisted_manuscript_and_worldbuilding_content_from_sqlite() {
+        let root = std::env::temp_dir().join(format!("weave-reopen-{}", Uuid::new_v4()));
+        database_for(&root, true).unwrap();
+        let project = Project { id: "project-reopen".into(), name: "Reopen evidence".into(), directory: root.to_string_lossy().into_owned(), schema_version: 6, created_at: timestamp(), updated_at: timestamp() };
+        let story = Story { id: "story-reopen".into(), project_id: project.id.clone(), title: "Story".into(), position: 0 };
+        let scene_set = SceneSet { id: "scene-set-reopen".into(), chapter_id: "chapter-reopen".into(), created_at: timestamp(), source_revision_id: None, active: true };
+        let chapter = Chapter { id: "chapter-reopen".into(), story_id: story.id.clone(), title: "Chapter 1".into(), position: 0, active_scene_set_id: scene_set.id.clone() };
+        let initial = Document { format_version: DOCUMENT_FORMAT_VERSION, blocks: vec![DocumentBlock { id: "block-reopen".into(), kind: "paragraph".into(), heading_level: None, alignment: None, runs: vec![TextRun { text: "First draft".into(), marks: vec![] }] }] };
+        let saved = Document { format_version: DOCUMENT_FORMAT_VERSION, blocks: vec![DocumentBlock { id: "block-reopen".into(), kind: "paragraph".into(), heading_level: None, alignment: None, runs: vec![TextRun { text: "Saved after reopen".into(), marks: vec![] }] }] };
+        let mut store = Store::default();
+        store.project = Some(project);
+        store.stories.push(story.clone());
+        store.scene_sets.push(scene_set.clone());
+        store.chapters.push(chapter.clone());
+        let document = add_document(&mut store, initial, "created").unwrap();
+        let record = store.documents.iter_mut().find(|record| record.id == document.id).unwrap();
+        record.head_revision = 2;
+        record.revisions.push(Revision { id: "revision-reopen-2".into(), document_id: document.id.clone(), number: 2, document: saved, created_at: timestamp(), reason: "manual save".into() });
+        store.scenes.push(Scene { id: "scene-reopen".into(), scene_set_id: scene_set.id, title: "Scene 1".into(), position: 0, document_id: document.id.clone() });
+        let folder = WorldbuildingFolder { id: "folder-reopen".into(), project_id: "project-reopen".into(), title: "Research".into(), parent_id: None, position: 0, created_at: timestamp(), updated_at: timestamp() };
+        let note = MarkdownNote { id: "note-reopen".into(), project_id: "project-reopen".into(), title: "Note".into(), markdown: "Persisted Markdown note".into(), folder_id: Some(folder.id.clone()), position: 0, revision: 2, created_at: timestamp(), updated_at: timestamp() };
+        let canvas = StoryCanvas { id: "canvas-reopen".into(), story_id: story.id.clone(), title: "Canvas".into(), folder_id: Some(folder.id.clone()), position: 1, viewport: CanvasViewport { x: -42.0, y: 18.0, zoom: 1.25 }, engine: default_canvas_engine(), excalidraw_state: None, revision: 3, created_at: timestamp(), updated_at: timestamp() };
+        store.worldbuilding_folders.push(folder.clone());
+        store.markdown_notes.push(note.clone());
+        store.canvases.push(canvas.clone());
+        store.canvas_nodes.push(CanvasNode { id: "canvas-node-reopen".into(), canvas_id: canvas.id.clone(), entity_id: note.id.clone(), position: CanvasPosition { x: 120.0, y: 240.0 } });
+        let state = AppState { root: Some(root.clone()), store };
+        state.persist().unwrap();
+
+        let mut reopened = AppState::default();
+        let opened = open_existing_project(root.to_string_lossy().into_owned(), &mut reopened).unwrap();
+        assert_eq!(opened.id, "project-reopen");
+        assert_eq!(reopened.store.status.message, "Project opened offline");
+        assert_eq!(reopened.store.stories[0].id, story.id);
+        assert_eq!(reopened.store.chapters[0].id, chapter.id);
+        assert_eq!(reopened.store.scenes[0].document_id, document.id);
+        assert_eq!(reopened.store.documents[0].head_revision, 2);
+        assert_eq!(reopened.store.documents[0].revisions[1].document.blocks[0].runs[0].text, "Saved after reopen");
+        assert_eq!(reopened.store.worldbuilding_folders[0].id, folder.id);
+        assert_eq!(reopened.store.markdown_notes[0].markdown, "Persisted Markdown note");
+        assert_eq!(reopened.store.canvases[0].viewport.zoom, 1.25);
+        assert_eq!(reopened.store.canvas_nodes[0].position.x, 120.0);
+        assert!(root.join(".weave/files/latest.json").exists());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

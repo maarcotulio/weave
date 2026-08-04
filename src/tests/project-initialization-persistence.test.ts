@@ -65,7 +65,7 @@ describe('project initialization and local persistence', () => {
     const snapshot = await reopened.snapshot();
     expect(snapshot.stories).toEqual([expect.objectContaining({ id: story.id, title: 'Created story' })]);
     expect(snapshot.chapters).toEqual([expect.objectContaining({ id: chapter.id, storyId: story.id, title: 'Created chapter' })]);
-    expect(snapshot.scenes).toEqual([expect.objectContaining({ id: scene.id, chapterId: chapter.id, title: 'Created scene', documentId: scene.documentId })]);
+    expect(snapshot.scenes).toEqual([expect.objectContaining({ id: scene.id, sceneSetId: chapter.activeSceneSetId, title: 'Created scene', documentId: scene.documentId })]);
     expect((await reopened.getDocument(scene.documentId)).document.blocks[0]?.runs[0]?.text).toBe('saved after creation');
     expect((await reopened.getDocument(scene.documentId)).revision).toBe(2);
     expect(snapshot.worldbuildingFolders).toEqual([expect.objectContaining({ id: folder.id, title: 'Created folder' })]);
