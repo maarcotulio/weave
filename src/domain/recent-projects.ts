@@ -25,6 +25,12 @@ export function validateProjectDirectory(value: string): string {
   return directory;
 }
 
+/** Accept exactly one native-picker folder; cancellation and multi-select do not mutate project state. */
+export function selectedProjectDirectory(selection: string | string[] | null): string | undefined {
+  if (!selection || Array.isArray(selection)) return undefined;
+  return validateProjectDirectory(selection);
+}
+
 function storage(): Storage | undefined {
   if (typeof window === 'undefined') return undefined;
   try { return window.localStorage; } catch { return undefined; }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { RECENT_PROJECTS_STORAGE_KEY, readRecentProjects, rememberRecentProject, removeRecentProject, validateProjectDirectory } from '../domain/recent-projects';
+import { RECENT_PROJECTS_STORAGE_KEY, readRecentProjects, rememberRecentProject, removeRecentProject, selectedProjectDirectory, validateProjectDirectory } from '../domain/recent-projects';
 
 function installStorage(initial?: string) {
   const values = new Map<string, string>();
@@ -40,5 +40,13 @@ describe('recent project metadata', () => {
     expect(() => validateProjectDirectory('')).toThrow();
     expect(() => validateProjectDirectory('/tmp/project/.weave')).toThrow();
     expect(() => validateProjectDirectory('/tmp/project/..')).toThrow();
+  });
+
+  it('accepts exactly one safe folder from the native picker', () => {
+    expect(selectedProjectDirectory('/tmp/chosen-project')).toBe('/tmp/chosen-project');
+    expect(selectedProjectDirectory(null)).toBeUndefined();
+    expect(selectedProjectDirectory([])).toBeUndefined();
+    expect(selectedProjectDirectory(['/tmp/one', '/tmp/two'])).toBeUndefined();
+    expect(() => selectedProjectDirectory('/tmp/chosen-project/.weave')).toThrow();
   });
 });

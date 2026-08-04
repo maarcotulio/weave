@@ -1,7 +1,7 @@
 use chrono::{Duration, Local, NaiveDate, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::{fs, io::ErrorKind, path::{Component, Path, PathBuf}, sync::Mutex};
+use std::{fs, io::{self, ErrorKind}, path::{Component, Path, PathBuf}, sync::Mutex};
 use tauri::State;
 use uuid::Uuid;
 
@@ -689,10 +689,59 @@ fn import_project_directory(directory: String, app: State<'_, Mutex<AppState>>) 
     Ok(project)
 }
 
-/** Build a complete store in a unique sibling directory, then claim the final
- * .weave directory with create_dir (which never replaces an existing path).
- * After that claim succeeds we never remove the final directory: another
- * process may observe or add data there while publication is finishing. */
+/// Atomically moves a directory only when the final name does not exist. The
+/// platform calls deliberately use no-replace flags: `std::fs::rename` may
+/// replace an empty destination directory, which is unsafe after another
+/// process has claimed or populated project storage.
+#[cfg(target_os = "linux")]
+fn rename_directory_noreplace(source: &Path, destination: &Path) -> io::Result<()> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    let source = CString::new(source.as_os_str().as_bytes()).map_err(|_| io::Error::new(ErrorKind::InvalidInput, "Project path contains NUL"))?;
+    let destination = CString::new(destination.as_os_str().as_bytes()).map_err(|_| io::Error::new(ErrorKind::InvalidInput, "Project path contains NUL"))?;
+    let result = unsafe { libc::syscall(libc::SYS_renameat2, libc::AT_FDCWD, source.as_ptr(), libc::AT_FDCWD, destination.as_ptr(), libc::RENAME_NOREPLACE) };
+    if result == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+}
+
+#[cfg(target_os = "macos")]
+fn rename_directory_noreplace(source: &Path, destination: &Path) -> io::Result<()> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    unsafe extern "C" { fn renamex_np(from: *const libc::c_char, to: *const libc::c_char, flags: u32) -> libc::c_int; }
+    const RENAME_EXCL: u32 = 0x0000_0004;
+    let source = CString::new(source.as_os_str().as_bytes()).map_err(|_| io::Error::new(ErrorKind::InvalidInput, "Project path contains NUL"))?;
+    let destination = CString::new(destination.as_os_str().as_bytes()).map_err(|_| io::Error::new(ErrorKind::InvalidInput, "Project path contains NUL"))?;
+    let result = unsafe { renamex_np(source.as_ptr(), destination.as_ptr(), RENAME_EXCL) };
+    if result == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+}
+
+#[cfg(target_os = "windows")]
+fn rename_directory_noreplace(source: &Path, destination: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "Kernel32")]
+    unsafe extern "system" { fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32; }
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = destination.as_os_str().encode_wide().chain(Some(0)).collect();
+    // No MOVEFILE_REPLACE_EXISTING flag: fail rather than replacing concurrent data.
+    if unsafe { MoveFileExW(source.as_ptr(), destination.as_ptr(), 0) } != 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn rename_directory_noreplace(_: &Path, _: &Path) -> io::Result<()> {
+    Err(io::Error::new(ErrorKind::Unsupported, "Atomic no-replace project publication is unavailable on this platform"))
+}
+
+fn publish_staged_weave(staged_weave: &Path, final_weave: &Path) -> Result<(), String> {
+    ensure_existing_directory(staged_weave, "private project staging data")?;
+    match rename_directory_noreplace(staged_weave, final_weave) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => Err("Project storage appeared while initializing; no existing data was changed".into()),
+        Err(error) => Err(format!("Cannot publish project storage safely: {error}")),
+    }
+}
+
+/** Build a complete store privately, then publish its complete `.weave`
+ * directory in one no-replace atomic rename. Until that rename succeeds there
+ * is no final storage to strand; on failure only this UUID-named staging tree
+ * is removed, never root/.weave. */
 fn stage_project_store(root: &Path, store: &Store) -> Result<(), String> {
     validate_project_root(root)?;
     ensure_directory_chain(root)?;
@@ -703,24 +752,16 @@ fn stage_project_store(root: &Path, store: &Store) -> Result<(), String> {
         database_for(&stage_root, true)?;
         let staged_state = AppState { root: Some(stage_root.clone()), store: store.clone() };
         staged_state.persist()?;
-
-        let final_weave = root.join(".weave");
-        match fs::create_dir(&final_weave) {
-            Ok(()) => {},
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => return Err("Project storage appeared while initializing; no existing data was changed".into()),
-            Err(error) => return Err(format!("Cannot claim project storage: {error}")),
-        }
-        for entry in fs::read_dir(&staged_weave).map_err(|error| format!("Cannot read private project staging data: {error}"))? {
-            let entry = entry.map_err(|error| error.to_string())?;
-            fs::rename(entry.path(), final_weave.join(entry.file_name())).map_err(|error| format!("Cannot publish project storage safely: {error}"))?;
-        }
-        fs::remove_dir(&staged_weave).map_err(|error| format!("Cannot finalize private project staging data: {error}"))?;
-        fs::remove_dir(&stage_root).map_err(|error| format!("Cannot finalize private project staging directory: {error}"))?;
+        publish_staged_weave(&staged_weave, &root.join(".weave"))?;
+        // Publication is committed once the no-replace rename succeeds. A
+        // best-effort removal of the now-empty private parent must not turn a
+        // successful project into a failed/retry-blocking operation.
+        let _ = fs::remove_dir(&stage_root);
         Ok(())
     })();
     if result.is_err() {
         // This UUID-named directory was created exclusively by this invocation.
-        // Never remove root/.weave here: it can already be visible to another process.
+        // Never remove root/.weave: a concurrent writer may have created it.
         let _ = fs::remove_dir_all(&stage_root);
     }
     result
@@ -1229,7 +1270,7 @@ mod tests {
     }
 
     #[test]
-    fn staged_project_store_never_removes_preexisting_storage_on_publish_collision() {
+    fn publish_collision_leaves_only_existing_storage_and_a_clean_retry_publishes_complete_store() {
         let root = std::env::temp_dir().join(format!("weave-stage-collision-{}", Uuid::new_v4()));
         let weave = root.join(".weave");
         fs::create_dir_all(&weave).unwrap();
@@ -1237,13 +1278,21 @@ mod tests {
         fs::write(&sentinel, "do not remove").unwrap();
         let project = Project { id: "project-stage-collision".into(), name: "Collision".into(), directory: root.to_string_lossy().into_owned(), schema_version: 7, created_at: timestamp(), updated_at: timestamp() };
         let mut store = Store::default();
-        store.project = Some(project);
+        store.project = Some(project.clone());
 
         let error = stage_project_store(&root, &store).unwrap_err();
 
         assert!(error.contains("appeared while initializing"));
         assert_eq!(fs::read_to_string(&sentinel).unwrap(), "do not remove");
+        assert_eq!(fs::read_dir(&weave).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>(), vec!["concurrent-data.txt"]);
         assert!(!fs::read_dir(&root).unwrap().any(|entry| entry.unwrap().file_name().to_string_lossy().starts_with(".weave-stage-")));
+
+        fs::remove_dir_all(&weave).unwrap();
+        stage_project_store(&root, &store).unwrap();
+        assert!(root.join(".weave/project.db").is_file());
+        assert!(root.join(".weave/files/latest.json").is_file());
+        let mut reopened = AppState::default();
+        assert_eq!(open_existing_project(root.to_string_lossy().into_owned(), &mut reopened).unwrap().id, project.id);
         let _ = fs::remove_dir_all(root);
     }
 

@@ -34,7 +34,7 @@ function worldbuildingTabKeysDeletedByFolder(snapshot: ProjectSnapshot, folderId
   ]);
 }
 import { documentText } from '../domain/manuscript-versions';
-import { readRecentProjects, rememberRecentProject, removeRecentProject, validateProjectDirectory, type RecentProject } from '../domain/recent-projects';
+import { readRecentProjects, rememberRecentProject, removeRecentProject, selectedProjectDirectory, validateProjectDirectory, type RecentProject } from '../domain/recent-projects';
 import { HomePage } from './Home';
 import { open as openDirectory } from '@tauri-apps/plugin-dialog';
 import { SettingsPage } from './Settings';
@@ -778,11 +778,7 @@ export default function App() {
     }
   });
 
-  const chooseDesktopProjectDirectory = async (title: string): Promise<string | undefined> => {
-    const directory = await openDirectory({ directory: true, multiple: false, title });
-    if (!directory || Array.isArray(directory)) return undefined;
-    return validateProjectDirectory(directory);
-  };
+  const chooseDesktopProjectDirectory = async (title: string): Promise<string | undefined> => selectedProjectDirectory(await openDirectory({ directory: true, multiple: false, title }));
   const showCreateProjectForm = (directory: string, trigger?: FocusTrigger) => setFormDialog({
     eyebrow: 'NEW PROJECT', title: 'Create a project', fields: [
       { key: 'directory', label: 'Project folder', value: directory, readOnly: isDesktop },
