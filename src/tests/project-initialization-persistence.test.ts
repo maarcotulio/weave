@@ -13,13 +13,19 @@ afterEach(async () => {
 });
 
 describe('project initialization and local persistence', () => {
-  it('does not seed stories, chapters, scenes, or documents after project creation in the renderer', () => {
+  it('selects a desktop project folder before creation and does not seed manuscript content in the renderer', () => {
     const app = readFileSync(join(process.cwd(), 'src/app/App.tsx'), 'utf8');
-    const createProject = app.slice(app.indexOf('const createProject ='), app.indexOf('const openProjectAt ='));
-    expect(createProject).toContain('repository.createProject(directory, name)');
+    const createProject = app.slice(app.indexOf('const chooseDesktopProjectDirectory ='), app.indexOf('const openProjectAt ='));
+    expect(createProject).toContain("openDirectory({ directory: true, multiple: false, title })");
+    expect(createProject).toContain("chooseDesktopProjectDirectory('Choose a folder for the new project')");
+    expect(createProject).toContain('repository.createProject(projectDirectory, name)');
+    expect(createProject).not.toContain("value: `${isDesktop ? '' : '/tmp/'}my-weave-project`");
     expect(createProject).not.toContain('repository.createStory');
     expect(createProject).not.toContain('repository.createChapter');
     expect(createProject).not.toContain('repository.createScene');
+    const openProject = app.slice(app.indexOf('const openProject ='), app.indexOf('const forgetRecentProject ='));
+    expect(openProject).toContain("chooseDesktopProjectDirectory('Choose a Weave project folder to open')");
+    expect(openProject).toContain('repository.openProject(directory)');
   });
 
   it('creates and reopens a project with only project metadata and storage structure', async () => {
