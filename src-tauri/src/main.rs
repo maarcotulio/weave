@@ -597,9 +597,7 @@ fn compose(store: &Store, chapter_id: &str) -> Result<Document, String> { let cu
 #[tauri::command]
 fn create_project(directory: String, name: String, app: State<'_, Mutex<AppState>>) -> Result<Project, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let root = PathBuf::from(directory.trim()); let directory = normalized_project_directory(&root)?; let _ = database_for(&root, true)?; state.root = Some(root); let project = Project { id: id("project"), name, directory, schema_version: 6, created_at: timestamp(), updated_at: timestamp() };  state.store = Store::default(); state.store.project = Some(project.clone()); status(&mut state, "saved", "Project created offline"); state.persist()?; Ok(project) }
 
-#[tauri::command]
-fn open_project(directory: String, app: State<'_, Mutex<AppState>>) -> Result<Project, String> {
-    let mut state = app.lock().map_err(|_| "Project lock poisoned")?;
+fn open_existing_project(directory: String, state: &mut AppState) -> Result<Project, String> {
     let root = PathBuf::from(directory.trim());
     validate_project_root(&root)?;
     ensure_existing_directory(&root, "project directory")?;
@@ -616,7 +614,13 @@ fn open_project(directory: String, app: State<'_, Mutex<AppState>>) -> Result<Pr
     let project = store.project.clone().ok_or_else(|| "Project metadata is missing".to_string())?;
     if normalized_project_directory(Path::new(&project.directory))? != normalized_project_directory(&root)? { return Err("Project metadata does not match the selected directory".into()); }
     state.store = store; state.root = Some(root);
-    status(&mut state, "saved", "Project opened offline"); state.persist()?; Ok(project)
+    status(state, "saved", "Project opened offline"); state.persist()?; Ok(project)
+}
+
+#[tauri::command]
+fn open_project(directory: String, app: State<'_, Mutex<AppState>>) -> Result<Project, String> {
+    let mut state = app.lock().map_err(|_| "Project lock poisoned")?;
+    open_existing_project(directory, &mut state)
 }
 #[tauri::command]
 fn get_project(app: State<'_, Mutex<AppState>>) -> Result<Project, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; state.store.project.clone().ok_or_else(|| "No project is open".into()) }
@@ -1091,16 +1095,19 @@ mod tests {
         let state = AppState { root: Some(root.clone()), store };
         state.persist().unwrap();
 
-        let reopened = load_store(&database_for(&root, false).unwrap()).unwrap();
-        assert_eq!(reopened.stories[0].id, story.id);
-        assert_eq!(reopened.chapters[0].id, chapter.id);
-        assert_eq!(reopened.scenes[0].document_id, document.id);
-        assert_eq!(reopened.documents[0].head_revision, 2);
-        assert_eq!(reopened.documents[0].revisions[1].document.blocks[0].runs[0].text, "Saved after reopen");
-        assert_eq!(reopened.worldbuilding_folders[0].id, folder.id);
-        assert_eq!(reopened.markdown_notes[0].markdown, "Persisted Markdown note");
-        assert_eq!(reopened.canvases[0].viewport.zoom, 1.25);
-        assert_eq!(reopened.canvas_nodes[0].position.x, 120.0);
+        let mut reopened = AppState::default();
+        let opened = open_existing_project(root.to_string_lossy().into_owned(), &mut reopened).unwrap();
+        assert_eq!(opened.id, "project-reopen");
+        assert_eq!(reopened.store.status.message, "Project opened offline");
+        assert_eq!(reopened.store.stories[0].id, story.id);
+        assert_eq!(reopened.store.chapters[0].id, chapter.id);
+        assert_eq!(reopened.store.scenes[0].document_id, document.id);
+        assert_eq!(reopened.store.documents[0].head_revision, 2);
+        assert_eq!(reopened.store.documents[0].revisions[1].document.blocks[0].runs[0].text, "Saved after reopen");
+        assert_eq!(reopened.store.worldbuilding_folders[0].id, folder.id);
+        assert_eq!(reopened.store.markdown_notes[0].markdown, "Persisted Markdown note");
+        assert_eq!(reopened.store.canvases[0].viewport.zoom, 1.25);
+        assert_eq!(reopened.store.canvas_nodes[0].position.x, 120.0);
         assert!(root.join(".weave/files/latest.json").exists());
         let _ = fs::remove_dir_all(root);
     }
