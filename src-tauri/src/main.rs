@@ -54,6 +54,12 @@ struct MarkdownNote { id: String, project_id: String, title: String, markdown: S
 struct MarkdownNoteInput { title: String, markdown: String }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct OutlineFile { id: String, project_id: String, title: String, markdown: String, position: i64, revision: i64, created_at: String, updated_at: String }
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OutlineFileInput { title: String, markdown: String }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct NoteLink { id: String, note_id: String, #[serde(skip_serializing_if = "Option::is_none")] target_id: Option<String>, target_text: String, #[serde(skip_serializing_if = "Option::is_none")] label: Option<String>, start: i64, end: i64, occurrence: i64, created_at: String }
 #[derive(Clone)]
 struct ParsedWikiLink { target_text: String, label: Option<String>, start: i64, end: i64, occurrence: i64 }
@@ -156,14 +162,14 @@ struct WritingStats { date: String, daily_target: i64, daily_words: i64, project
 #[serde(rename_all = "camelCase")]
 struct Store {
     project: Option<Project>, stories: Vec<Story>, chapters: Vec<Chapter>, scene_sets: Vec<SceneSet>, scenes: Vec<Scene>, documents: Vec<DocumentRecord>, drafts: Vec<ContinuousDraft>, backups: Vec<BackupRecord>,
-    #[serde(default)] worldbuilding_items: Vec<WorldbuildingItem>, #[serde(default)] relationships: Vec<DomainRelationship>, #[serde(default)] document_links: Vec<DocumentLink>, #[serde(default)] worldbuilding_folders: Vec<WorldbuildingFolder>, #[serde(default)] markdown_notes: Vec<MarkdownNote>, #[serde(default)] note_links: Vec<NoteLink>, #[serde(default)] canvases: Vec<StoryCanvas>, #[serde(default)] canvas_nodes: Vec<CanvasNode>, #[serde(default)] canvas_edges: Vec<CanvasEdge>, #[serde(default)] manuscript_versions: Vec<StoredManuscriptVersion>,
+    #[serde(default)] worldbuilding_items: Vec<WorldbuildingItem>, #[serde(default)] relationships: Vec<DomainRelationship>, #[serde(default)] document_links: Vec<DocumentLink>, #[serde(default)] worldbuilding_folders: Vec<WorldbuildingFolder>, #[serde(default)] outline_files: Vec<OutlineFile>, #[serde(default)] markdown_notes: Vec<MarkdownNote>, #[serde(default)] note_links: Vec<NoteLink>, #[serde(default)] canvases: Vec<StoryCanvas>, #[serde(default)] canvas_nodes: Vec<CanvasNode>, #[serde(default)] canvas_edges: Vec<CanvasEdge>, #[serde(default)] manuscript_versions: Vec<StoredManuscriptVersion>,
     #[serde(default = "default_style_profile")] style_profile: EditorStyleProfile,
     #[serde(default = "default_writing_goals")] writing_goals: WritingGoals,
     status: OperationStatus,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ProjectSnapshot { project: Project, stories: Vec<Story>, chapters: Vec<Chapter>, scene_sets: Vec<SceneSet>, scenes: Vec<Scene>, continuous_drafts: Vec<ContinuousDraft>, worldbuilding_folders: Vec<WorldbuildingFolder>, markdown_notes: Vec<MarkdownNote>, note_links: Vec<NoteLink>, canvases: Vec<StoryCanvas>, backups: Vec<BackupRecord>, style_profile: EditorStyleProfile, writing_stats: WritingStats, writing_activity: Vec<WritingActivity>, manuscript_versions: Vec<ManuscriptVersionSummary>, status: OperationStatus }
+struct ProjectSnapshot { project: Project, stories: Vec<Story>, chapters: Vec<Chapter>, scene_sets: Vec<SceneSet>, scenes: Vec<Scene>, continuous_drafts: Vec<ContinuousDraft>, worldbuilding_folders: Vec<WorldbuildingFolder>, outline_files: Vec<OutlineFile>, markdown_notes: Vec<MarkdownNote>, note_links: Vec<NoteLink>, canvases: Vec<StoryCanvas>, backups: Vec<BackupRecord>, style_profile: EditorStyleProfile, writing_stats: WritingStats, writing_activity: Vec<WritingActivity>, manuscript_versions: Vec<ManuscriptVersionSummary>, status: OperationStatus }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DocumentHead { document_id: String, document: Document, revision: i64, revision_id: String }
@@ -185,7 +191,7 @@ fn valid_canvas_engine(value: &str) -> bool { value == "react-flow" || value == 
 fn default_style_profile() -> EditorStyleProfile { EditorStyleProfile { font_family: "Times New Roman".into(), font_size_pt: 12.0, line_spacing: "double".into(), page_size: default_page_size(), text_margins: default_text_margins() } }
 fn default_writing_goals() -> WritingGoals { WritingGoals { daily_target: 500, daily_word_counts: std::collections::HashMap::new() } }
 impl Default for OperationStatus { fn default() -> Self { Self { state: "idle".into(), message: "Ready".into(), at: timestamp() } } }
-impl Default for Store { fn default() -> Self { Self { project: None, stories: vec![], chapters: vec![], scene_sets: vec![], scenes: vec![], documents: vec![], drafts: vec![], backups: vec![], worldbuilding_folders: vec![], worldbuilding_items: vec![], relationships: vec![], document_links: vec![], markdown_notes: vec![], note_links: vec![], canvases: vec![], canvas_nodes: vec![], canvas_edges: vec![], manuscript_versions: vec![], style_profile: default_style_profile(), writing_goals: default_writing_goals(), status: OperationStatus::default() } } }
+impl Default for Store { fn default() -> Self { Self { project: None, stories: vec![], chapters: vec![], scene_sets: vec![], scenes: vec![], documents: vec![], drafts: vec![], backups: vec![], worldbuilding_folders: vec![], outline_files: vec![], worldbuilding_items: vec![], relationships: vec![], document_links: vec![], markdown_notes: vec![], note_links: vec![], canvases: vec![], canvas_nodes: vec![], canvas_edges: vec![], manuscript_versions: vec![], style_profile: default_style_profile(), writing_goals: default_writing_goals(), status: OperationStatus::default() } } }
 
 struct AppState { root: Option<PathBuf>, store: Store }
 impl Default for AppState { fn default() -> Self { Self { root: None, store: Store::default() } } }
@@ -326,6 +332,7 @@ fn database_for(root: &Path, allow_create: bool) -> Result<PathBuf, String> {
     connection.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (4, ?1)", params![timestamp()]).map_err(|e| e.to_string())?;
     connection.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (5, ?1)", params![timestamp()]).map_err(|e| e.to_string())?;
     connection.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (6, ?1)", params![timestamp()]).map_err(|e| e.to_string())?;
+    connection.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (7, ?1)", params![timestamp()]).map_err(|e| e.to_string())?;
     Ok(db)
 }
 fn load_store(db: &Path) -> Result<Store, String> {
@@ -542,6 +549,15 @@ fn validate_store(store: &Store) -> Result<(), String> {
     for chapter_value in &store.chapters {
         if !store.scene_sets.iter().any(|set| set.id == chapter_value.active_scene_set_id && set.chapter_id == chapter_value.id && set.active) { return Err(format!("Chapter {} has no active scene set", chapter_value.id)); }
     }
+    let project = store.project.as_ref().ok_or_else(|| "Project metadata is missing".to_string())?;
+    ensure_unique_ids(store.outline_files.iter().map(|file| file.id.clone()), "outline file")?;
+    let mut outline_titles = std::collections::HashSet::new(); let mut outline_positions = std::collections::HashSet::new();
+    for file in &store.outline_files {
+        if file.project_id != project.id || file.title.trim().is_empty() || file.revision < 1 || file.position < 0 { return Err(format!("Outline file {} is invalid", file.id)); }
+        if !outline_titles.insert(file.title.to_lowercase()) { return Err(format!("Duplicate outline file title {}", file.title)); }
+        if !outline_positions.insert(file.position) { return Err(format!("Duplicate outline file position {}", file.position)); }
+    }
+    if outline_positions.iter().copied().max().map(|max| max + 1 != store.outline_files.len() as i64).unwrap_or(false) { return Err("Outline file positions are not contiguous".into()); }
     for note in &store.markdown_notes { if note.title.trim().is_empty() || note.revision < 1 { return Err(format!("Markdown note {} is invalid", note.id)); } }
     for link in &store.note_links {
         markdown_note(store, &link.note_id)?;
@@ -594,8 +610,81 @@ fn replace_manuscript_snapshot(store: &mut Store, snapshot: &ManuscriptVersionSn
 }
 fn compose(store: &Store, chapter_id: &str) -> Result<Document, String> { let current = chapter(store, chapter_id)?; let scenes = active_scenes(store, chapter_id, &current.active_scene_set_id); let mut blocks = vec![]; for (index, scene) in scenes.iter().enumerate() { if index > 0 { blocks.push(DocumentBlock { id: id("scene-break"), kind: "scene-break".into(), heading_level: None, alignment: None, runs: vec![TextRun { text: String::new(), marks: vec![] }] }); } let record = document_record(store, &scene.document_id)?; let revision = record.revisions.last().ok_or_else(|| "Document has no revision".to_string())?; blocks.extend(revision.document.blocks.clone()); } Ok(Document { format_version: DOCUMENT_FORMAT_VERSION, blocks }) }
 
+fn imported_document(markdown: &str) -> Document {
+    let mut blocks = vec![];
+    for line in markdown.replace("\r\n", "\n").replace('\r', "\n").split('\n') {
+        let hashes = line.chars().take_while(|value| *value == '#').count();
+        let heading = (1..=3).contains(&hashes) && line.as_bytes().get(hashes) == Some(&b' ');
+        let text = if heading { line[hashes..].trim().trim_end_matches('#').trim().to_string() } else { line.to_string() };
+        blocks.push(DocumentBlock { id: id("block"), kind: if heading { "heading".into() } else { "paragraph".into() }, heading_level: heading.then_some(hashes as u8), alignment: None, runs: vec![TextRun { text, marks: vec![] }] });
+    }
+    if blocks.is_empty() { return empty_document(); }
+    Document { format_version: DOCUMENT_FORMAT_VERSION, blocks }
+}
+
+fn read_import_markdown(path: &Path, root: &Path, label: &str) -> Result<String, String> {
+    let canonical = fs::canonicalize(path).map_err(|error| format!("Cannot resolve {label}: {error}"))?;
+    if !canonical.starts_with(root) { return Err(format!("Import path escaped its selected root: {}", path.display())); }
+    let before = fs::symlink_metadata(&canonical).map_err(|error| format!("Cannot inspect {label}: {error}"))?;
+    if before.file_type().is_symlink() || !before.is_file() || before.len() > 10 * 1024 * 1024 { return Err(format!("Unsafe import file: {}", path.display())); }
+    #[cfg(unix)]
+    let mut file = { use std::os::unix::fs::OpenOptionsExt; std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(&canonical).map_err(|error| format!("Cannot open {label} safely: {error}"))? };
+    #[cfg(not(unix))]
+    let mut file = std::fs::OpenOptions::new().read(true).open(&canonical).map_err(|error| format!("Cannot open {label}: {error}"))?;
+    let opened = file.metadata().map_err(|error| error.to_string())?;
+    if opened.len() != before.len() { return Err(format!("Import file changed while opening: {}", path.display())); }
+    let mut markdown = String::new(); use std::io::Read; file.read_to_string(&mut markdown).map_err(|error| format!("Cannot read {label}: {error}"))?;
+    let after = fs::symlink_metadata(&canonical).map_err(|error| error.to_string())?;
+    if after.len() != before.len() || after.file_type().is_symlink() { return Err(format!("Import file changed while reading: {}", path.display())); }
+    Ok(markdown)
+}
+
+fn import_markdown_files(root: &Path, current: &Path, files: &mut Vec<(PathBuf, String)>, directories: &mut Vec<(PathBuf, String)>) -> Result<(), String> {
+    let current_metadata = fs::symlink_metadata(current).map_err(|error| format!("Cannot inspect import directory {}: {error}", current.display()))?;
+    let canonical_current = fs::canonicalize(current).map_err(|error| format!("Cannot resolve import directory {}: {error}", current.display()))?;
+    if current_metadata.file_type().is_symlink() || !current_metadata.is_dir() || !canonical_current.starts_with(root) { return Err(format!("Unsafe import directory: {}", current.display())); }
+    for entry in fs::read_dir(&canonical_current).map_err(|error| format!("Cannot read import directory {}: {error}", current.display()))? {
+        let entry = entry.map_err(|error| error.to_string())?; let path = entry.path(); let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+        if metadata.file_type().is_symlink() { return Err(format!("Unsafe symlink in import: {}", path.display())); }
+        let relative = path.strip_prefix(root).map_err(|_| "Invalid import path")?.to_string_lossy().replace('\\', "/");
+        if metadata.is_dir() { directories.push((path.clone(), relative)); import_markdown_files(root, &path, files, directories)?; }
+        else if metadata.is_file() && path.extension().and_then(|value| value.to_str()).map(|value| value.eq_ignore_ascii_case("md")).unwrap_or(false) {
+            if metadata.len() > 10 * 1024 * 1024 { return Err(format!("Markdown file exceeds 10 MiB: {relative}")); }
+            files.push((path, relative));
+        } else if !metadata.is_file() { return Err(format!("Unsupported import entry: {relative}")); }
+    }
+    Ok(())
+}
+fn import_title(relative: &str) -> Result<String, String> { let title = relative.strip_suffix(".md").or_else(|| relative.strip_suffix(".MD")).unwrap_or(relative).replace('/', " / ").trim().to_string(); if title.is_empty() { Err("Imported file title is empty".into()) } else { Ok(title) } }
+
 #[tauri::command]
-fn create_project(directory: String, name: String, app: State<'_, Mutex<AppState>>) -> Result<Project, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let root = PathBuf::from(directory.trim()); let directory = normalized_project_directory(&root)?; let _ = database_for(&root, true)?; state.root = Some(root); let project = Project { id: id("project"), name, directory, schema_version: 6, created_at: timestamp(), updated_at: timestamp() };  state.store = Store::default(); state.store.project = Some(project.clone()); status(&mut state, "saved", "Project created offline"); state.persist()?; Ok(project) }
+fn import_project_directory(directory: String, app: State<'_, Mutex<AppState>>) -> Result<Project, String> {
+    let selected_root = PathBuf::from(directory.trim()); validate_project_root(&selected_root)?; ensure_existing_directory(&selected_root, "import project directory")?; let root = fs::canonicalize(&selected_root).map_err(|error| format!("Cannot canonicalize import project directory: {error}"))?;
+    if fs::symlink_metadata(root.join(".weave")).is_ok() { return Err("The selected import folder already contains .weave".into()); }
+    let mut top = vec![];
+    for entry in fs::read_dir(&root).map_err(|error| error.to_string())? { let entry = entry.map_err(|error| error.to_string())?; let metadata = fs::symlink_metadata(entry.path()).map_err(|error| error.to_string())?; if metadata.file_type().is_symlink() || !metadata.is_dir() { return Err("Import root must contain only the three required folders".into()); } top.push(entry.file_name().to_string_lossy().into_owned()); }
+    top.sort(); if top != ["manuscript", "outline", "worldbuilding"] { return Err("Import root must contain exactly manuscript, outline, and worldbuilding folders".into()); }
+    let mut manuscript = vec![]; let mut outline = vec![]; let mut world_files = vec![]; let mut unused = vec![]; let mut world_dirs = vec![];
+    import_markdown_files(&root.join("manuscript"), &root.join("manuscript"), &mut manuscript, &mut unused)?;
+    import_markdown_files(&root.join("outline"), &root.join("outline"), &mut outline, &mut unused)?;
+    import_markdown_files(&root.join("worldbuilding"), &root.join("worldbuilding"), &mut world_files, &mut world_dirs)?;
+    let total = manuscript.len() + outline.len() + world_files.len(); if total > 2000 { return Err("Import contains more than 2,000 Markdown files".into()); }
+    manuscript.sort_by(|a,b| a.1.cmp(&b.1)); outline.sort_by(|a,b| a.1.cmp(&b.1)); world_files.sort_by(|a,b| a.1.cmp(&b.1)); world_dirs.sort_by(|a,b| a.1.cmp(&b.1));
+    let normalized = normalized_project_directory(&root)?; let name = root.file_name().and_then(|value| value.to_str()).filter(|value| !value.is_empty()).unwrap_or("Imported project").to_string();
+    let project = Project { id: id("project"), name: name.clone(), directory: normalized, schema_version: 7, created_at: timestamp(), updated_at: timestamp() };
+    let mut store = Store::default(); store.project = Some(project.clone());
+    let story = Story { id: id("story"), project_id: project.id.clone(), title: name, position: 0 }; store.stories.push(story.clone());
+    for (position, (path, relative)) in manuscript.into_iter().enumerate() { let title = import_title(&relative)?; let markdown = read_import_markdown(&path, &root, &format!("manuscript {relative}"))?; let chapter_id = id("chapter"); let set = SceneSet { id: id("scene-set"), chapter_id: chapter_id.clone(), created_at: timestamp(), source_revision_id: None, active: true }; let chapter = Chapter { id: chapter_id, story_id: story.id.clone(), title: title.clone(), position: position as i64, active_scene_set_id: set.id.clone() }; let record = add_document(&mut store, imported_document(&markdown), "created")?; store.scene_sets.push(set.clone()); store.chapters.push(chapter); store.scenes.push(Scene { id: id("scene"), scene_set_id: set.id, title, position: 0, document_id: record.id }); }
+    for (position, (path, relative)) in outline.into_iter().enumerate() { let title = import_title(&relative)?; let markdown = read_import_markdown(&path, &root, &format!("outline {relative}"))?; store.outline_files.push(OutlineFile { id: id("outline-file"), project_id: project.id.clone(), title, markdown, position: position as i64, revision: 1, created_at: timestamp(), updated_at: timestamp() }); }
+    let mut folder_ids: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for (position, (_, relative)) in world_dirs.into_iter().enumerate() { let parent_path = relative.rsplit_once('/').map(|(parent, _)| parent); let parent_id = parent_path.and_then(|parent| folder_ids.get(parent).cloned()); let title = relative.rsplit('/').next().unwrap_or(&relative).to_string(); let folder = WorldbuildingFolder { id: id("world-folder"), project_id: project.id.clone(), title, parent_id, position: position as i64, created_at: timestamp(), updated_at: timestamp() }; folder_ids.insert(relative, folder.id.clone()); store.worldbuilding_folders.push(folder); }
+    for (position, (path, relative)) in world_files.into_iter().enumerate() { let title = import_title(relative.rsplit('/').next().unwrap_or(&relative))?; let markdown = read_import_markdown(&path, &root, &format!("worldbuilding {relative}"))?; let parent = relative.rsplit_once('/').and_then(|(parent, _)| folder_ids.get(parent).cloned()); store.markdown_notes.push(MarkdownNote { id: id("note"), project_id: project.id.clone(), title, markdown, folder_id: parent, position: position as i64, revision: 1, created_at: timestamp(), updated_at: timestamp() }); }
+    let notes = store.markdown_notes.clone(); for note in notes { store.note_links.extend(rebuild_note_links(&store, &note, &[])); }
+    let cleanup_root = root.clone(); let mut state = app.lock().map_err(|_| "Project lock poisoned")?; if let Err(error) = database_for(&root, true) { return Err(error); } state.root = Some(root); state.store = store; status(&mut state, "saved", "Project folder imported"); if let Err(error) = state.persist() { state.root = None; state.store = Store::default(); let _ = fs::remove_dir_all(cleanup_root.join(".weave")); return Err(error); } Ok(project)
+}
+
+#[tauri::command]
+fn create_project(directory: String, name: String, app: State<'_, Mutex<AppState>>) -> Result<Project, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let root = PathBuf::from(directory.trim()); let directory = normalized_project_directory(&root)?; let _ = database_for(&root, true)?; state.root = Some(root); let project = Project { id: id("project"), name, directory, schema_version: 7, created_at: timestamp(), updated_at: timestamp() };  state.store = Store::default(); state.store.project = Some(project.clone()); status(&mut state, "saved", "Project created offline"); state.persist()?; Ok(project) }
 
 fn open_existing_project(directory: String, state: &mut AppState) -> Result<Project, String> {
     let root = PathBuf::from(directory.trim());
@@ -606,7 +695,7 @@ fn open_existing_project(directory: String, state: &mut AppState) -> Result<Proj
     let db = database_for(&root, false)?;
     let mut store = load_store(&db)?;
     normalize_worldbuilding_positions(&mut store);
-    if let Some(project) = store.project.as_mut() { project.schema_version = project.schema_version.max(6); }
+    if let Some(project) = store.project.as_mut() { project.schema_version = project.schema_version.max(7); }
     for canvas in &mut store.canvases { if canvas.engine.is_empty() { canvas.engine = default_canvas_engine(); } }
     let note_ids: std::collections::HashSet<String> = store.markdown_notes.iter().map(|note| note.id.clone()).collect();
     store.worldbuilding_items.clear(); store.relationships.clear(); store.document_links.clear();
@@ -854,6 +943,14 @@ fn create_markdown_note(title: String, markdown: Option<String>, app: State<'_, 
 #[tauri::command]
 fn update_markdown_note(note_id: String, input: MarkdownNoteInput, expected_revision: i64, app: State<'_, Mutex<AppState>>) -> Result<MarkdownNote, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let current = markdown_note(&state.store, &note_id)?.clone(); if current.revision != expected_revision { status(&mut state, "revision-conflict", "Save stopped: this note changed elsewhere"); state.persist()?; return Err(format!("Revision conflict: expected {expected_revision}, current {}", current.revision)); } if input.title.trim().is_empty() { return Err("A note title is required".into()); } let mut note = current.clone(); note.title = input.title.trim().into(); note.markdown = input.markdown; note.revision += 1; note.updated_at = timestamp(); let previous: Vec<NoteLink> = state.store.note_links.iter().filter(|link| link.note_id == note_id).cloned().collect(); let links = rebuild_note_links(&state.store, &note, &previous); let stored = state.store.markdown_notes.iter_mut().find(|candidate| candidate.id == note_id).unwrap(); *stored = note.clone(); state.store.note_links.retain(|link| link.note_id != note_id); state.store.note_links.extend(links); status(&mut state, "saved", "Markdown note and deterministic links saved"); state.persist()?; Ok(note) }
 #[tauri::command]
+fn create_outline_file(title: String, markdown: Option<String>, app: State<'_, Mutex<AppState>>) -> Result<OutlineFile, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; if title.trim().is_empty() { return Err("An outline file title is required".into()); } let project = state.store.project.clone().ok_or_else(|| "No project is open".to_string())?; let value = OutlineFile { id: id("outline-file"), project_id: project.id, title: title.trim().into(), markdown: markdown.unwrap_or_default(), position: state.store.outline_files.len() as i64, revision: 1, created_at: timestamp(), updated_at: timestamp() }; state.store.outline_files.push(value.clone()); status(&mut state, "saved", "Outline file saved"); state.persist()?; Ok(value) }
+#[tauri::command]
+fn update_outline_file(file_id: String, input: OutlineFileInput, expected_revision: i64, app: State<'_, Mutex<AppState>>) -> Result<OutlineFile, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let file = state.store.outline_files.iter_mut().find(|value| value.id == file_id).ok_or_else(|| "Unknown outline file".to_string())?; if file.revision != expected_revision { return Err(format!("Revision conflict: expected {expected_revision}, current {}", file.revision)); } if input.title.trim().is_empty() { return Err("An outline file title is required".into()); } file.title = input.title.trim().into(); file.markdown = input.markdown; file.revision += 1; file.updated_at = timestamp(); let value = file.clone(); status(&mut state, "saved", "Outline file saved"); state.persist()?; Ok(value) }
+#[tauri::command]
+fn delete_outline_file(file_id: String, expected_revision: i64, app: State<'_, Mutex<AppState>>) -> Result<(), String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let file = state.store.outline_files.iter().find(|value| value.id == file_id).ok_or_else(|| "Unknown outline file".to_string())?; if file.revision != expected_revision { return Err(format!("Revision conflict: expected {expected_revision}, current {}", file.revision)); } state.store.outline_files.retain(|value| value.id != file_id); for (position, file) in state.store.outline_files.iter_mut().enumerate() { file.position = position as i64; } status(&mut state, "saved", "Outline file deleted"); state.persist() }
+#[tauri::command]
+fn list_outline_files(app: State<'_, Mutex<AppState>>) -> Result<Vec<OutlineFile>, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let mut values = state.store.outline_files.clone(); values.sort_by(|a,b| a.position.cmp(&b.position)); Ok(values) }
+#[tauri::command]
 fn delete_markdown_note(note_id: String, expected_revision: i64, mode: Option<String>, app: State<'_, Mutex<AppState>>) -> Result<(), String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let note = markdown_note(&state.store, &note_id)?.clone(); if note.revision != expected_revision { status(&mut state, "revision-conflict", "Save stopped: this note changed elsewhere"); state.persist()?; return Err(format!("Revision conflict: expected {expected_revision}, current {}", note.revision)); } let incoming = state.store.note_links.iter().filter(|value| value.note_id != note_id && value.target_id.as_deref() == Some(&note_id)).count(); let links: Vec<String> = state.store.note_links.iter().filter(|value| value.note_id == note_id).map(|value| value.id.clone()).collect(); let nodes: Vec<String> = state.store.canvas_nodes.iter().filter(|value| value.entity_id == note_id).map(|value| value.id.clone()).collect(); if mode.as_deref().unwrap_or("reject") != "remove-references" && (incoming > 0 || !nodes.is_empty()) { return Err(format!("Cannot delete {}: references remain. Choose remove-references to preserve unresolved Markdown links.", note.title)); } state.store.note_links.retain(|value| value.note_id != note_id); if mode.as_deref() == Some("remove-references") { state.store.note_links.iter_mut().filter(|value| value.target_id.as_deref() == Some(&note_id)).for_each(|value| value.target_id = None); } state.store.canvas_nodes.retain(|value| !nodes.contains(&value.id)); state.store.canvas_edges.retain(|value| !links.contains(&value.note_link_id) && !nodes.contains(&value.source_node_id) && !nodes.contains(&value.target_node_id)); state.store.markdown_notes.retain(|value| value.id != note_id); normalize_worldbuilding_positions(&mut state.store); status(&mut state, "saved", "Markdown note deleted safely"); state.persist()?; Ok(()) }
 #[tauri::command]
 fn list_markdown_notes(app: State<'_, Mutex<AppState>>) -> Result<Vec<MarkdownNote>, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let mut notes = state.store.markdown_notes.clone(); notes.sort_by(|left, right| left.title.cmp(&right.title)); Ok(notes) }
@@ -952,16 +1049,16 @@ fn capture_backup(state: &mut AppState) -> Result<BackupRecord, String> { let db
 #[tauri::command]
 fn create_backup(app: State<'_, Mutex<AppState>>) -> Result<BackupRecord, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; capture_backup(&mut state) }
 #[tauri::command]
-fn recover_from_backup(backup_id: String, app: State<'_, Mutex<AppState>>) -> Result<OperationStatus, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let connection = Connection::open(state.db_path()?).map_err(|e| e.to_string())?; let json: String = connection.query_row("SELECT state_json FROM backups WHERE id=?1", params![backup_id], |row| row.get(0)).map_err(|e| e.to_string())?; state.store = serde_json::from_str(&json).map_err(|e| e.to_string())?; normalize_worldbuilding_positions(&mut state.store); let note_ids: std::collections::HashSet<String> = state.store.markdown_notes.iter().map(|note| note.id.clone()).collect(); state.store.worldbuilding_items.clear(); state.store.relationships.clear(); state.store.document_links.clear(); state.store.canvas_nodes.retain(|node| note_ids.contains(&node.entity_id)); state.store.canvas_edges.clear(); if let Some(project) = state.store.project.as_mut() { project.schema_version = project.schema_version.max(6); } for canvas in &mut state.store.canvases { if canvas.engine.is_empty() { canvas.engine = default_canvas_engine(); } } normalize_worldbuilding_positions(&mut state.store); status(&mut state, "recovered", "Recovered backup; verify the project before editing"); state.persist()?; Ok(state.store.status.clone()) }
+fn recover_from_backup(backup_id: String, app: State<'_, Mutex<AppState>>) -> Result<OperationStatus, String> { let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let connection = Connection::open(state.db_path()?).map_err(|e| e.to_string())?; let json: String = connection.query_row("SELECT state_json FROM backups WHERE id=?1", params![backup_id], |row| row.get(0)).map_err(|e| e.to_string())?; state.store = serde_json::from_str(&json).map_err(|e| e.to_string())?; normalize_worldbuilding_positions(&mut state.store); let note_ids: std::collections::HashSet<String> = state.store.markdown_notes.iter().map(|note| note.id.clone()).collect(); state.store.worldbuilding_items.clear(); state.store.relationships.clear(); state.store.document_links.clear(); state.store.canvas_nodes.retain(|node| note_ids.contains(&node.entity_id)); state.store.canvas_edges.clear(); if let Some(project) = state.store.project.as_mut() { project.schema_version = project.schema_version.max(7); } for canvas in &mut state.store.canvases { if canvas.engine.is_empty() { canvas.engine = default_canvas_engine(); } } normalize_worldbuilding_positions(&mut state.store); status(&mut state, "recovered", "Recovered backup; verify the project before editing"); state.persist()?; Ok(state.store.status.clone()) }
 #[tauri::command]
 fn get_status(app: State<'_, Mutex<AppState>>) -> Result<OperationStatus, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; Ok(state.store.status.clone()) }
 #[tauri::command]
-fn project_snapshot(app: State<'_, Mutex<AppState>>) -> Result<ProjectSnapshot, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let project = state.store.project.clone().ok_or_else(|| "No project is open".to_string())?; Ok(ProjectSnapshot { project, stories: state.store.stories.clone(), chapters: state.store.chapters.clone(), scene_sets: state.store.scene_sets.clone(), scenes: state.store.scenes.clone(), continuous_drafts: state.store.drafts.clone(), worldbuilding_folders: state.store.worldbuilding_folders.clone(), markdown_notes: state.store.markdown_notes.clone(), note_links: state.store.note_links.clone(), canvases: state.store.canvases.clone(), backups: state.store.backups.clone(), style_profile: state.store.style_profile.clone(), writing_stats: make_writing_stats(&state.store), writing_activity: make_writing_activity(&state.store, 365), manuscript_versions: manuscript_version_summaries(&state.store), status: state.store.status.clone() }) }
+fn project_snapshot(app: State<'_, Mutex<AppState>>) -> Result<ProjectSnapshot, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let project = state.store.project.clone().ok_or_else(|| "No project is open".to_string())?; Ok(ProjectSnapshot { project, stories: state.store.stories.clone(), chapters: state.store.chapters.clone(), scene_sets: state.store.scene_sets.clone(), scenes: state.store.scenes.clone(), continuous_drafts: state.store.drafts.clone(), worldbuilding_folders: state.store.worldbuilding_folders.clone(), outline_files: state.store.outline_files.clone(), markdown_notes: state.store.markdown_notes.clone(), note_links: state.store.note_links.clone(), canvases: state.store.canvases.clone(), backups: state.store.backups.clone(), style_profile: state.store.style_profile.clone(), writing_stats: make_writing_stats(&state.store), writing_activity: make_writing_activity(&state.store, 365), manuscript_versions: manuscript_version_summaries(&state.store), status: state.store.status.clone() }) }
 #[tauri::command]
 fn write_export(filename: String, bytes: Vec<u8>, app: State<'_, Mutex<AppState>>) -> Result<String, String> { let state = app.lock().map_err(|_| "Project lock poisoned")?; let root = state.root.as_ref().ok_or_else(|| "No project is open".to_string())?; let weave = root.join(".weave"); ensure_existing_directory(&weave, ".weave directory")?; let exports = weave.join("exports"); ensure_directory_chain(&exports)?; let safe = Path::new(&filename).file_name().filter(|value| *value != "." && *value != "..").ok_or_else(|| "Invalid export filename".to_string())?; let path = exports.join(safe); ensure_safe_write_target(&path, "export file")?; fs::write(&path, bytes).map_err(|e| e.to_string())?; Ok(path.to_string_lossy().into_owned()) }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() { tauri::Builder::default().manage(Mutex::new(AppState::default())).invoke_handler(tauri::generate_handler![create_project, open_project, get_project, create_story, create_chapter, create_scene, rename_story, rename_chapter, delete_story, delete_chapter, delete_scene, list_stories, list_chapters, list_scene_sets, list_scenes, rename_scene, reorder_chapter, reorder_scene, create_worldbuilding_folder, rename_worldbuilding_folder, delete_worldbuilding_folder, list_worldbuilding_folders, list_worldbuilding_entries, move_worldbuilding_entry, create_markdown_note, update_markdown_note, delete_markdown_note, list_markdown_notes, search_markdown_notes, list_note_links, repair_note_link, create_canvas, update_canvas, delete_canvas, list_canvases, canvas_projection, save_excalidraw_scene, add_canvas_node, remove_canvas_node, save_canvas_layout, get_document, get_revision, save_document, get_style_profile, update_style_profile, writing_stats, writing_activity, save_manuscript_version, list_manuscript_versions, get_manuscript_version, compare_manuscript_versions, restore_manuscript_version, set_daily_word_target, enter_continuous_draft, get_continuous_draft, keep_continuous_separate, automatically_split_continuous, compose_chapter, integrity_check, create_backup, recover_from_backup, get_status, project_snapshot, write_export]).run(tauri::generate_context!()).expect("error while running Weave"); }
+pub fn run() { tauri::Builder::default().plugin(tauri_plugin_dialog::init()).manage(Mutex::new(AppState::default())).invoke_handler(tauri::generate_handler![create_project, import_project_directory, open_project, get_project, create_story, create_chapter, create_scene, rename_story, rename_chapter, delete_story, delete_chapter, delete_scene, list_stories, list_chapters, list_scene_sets, list_scenes, rename_scene, reorder_chapter, reorder_scene, create_worldbuilding_folder, rename_worldbuilding_folder, delete_worldbuilding_folder, list_worldbuilding_folders, list_worldbuilding_entries, move_worldbuilding_entry, create_markdown_note, update_markdown_note, create_outline_file, update_outline_file, delete_outline_file, list_outline_files, delete_markdown_note, list_markdown_notes, search_markdown_notes, list_note_links, repair_note_link, create_canvas, update_canvas, delete_canvas, list_canvases, canvas_projection, save_excalidraw_scene, add_canvas_node, remove_canvas_node, save_canvas_layout, get_document, get_revision, save_document, get_style_profile, update_style_profile, writing_stats, writing_activity, save_manuscript_version, list_manuscript_versions, get_manuscript_version, compare_manuscript_versions, restore_manuscript_version, set_daily_word_target, enter_continuous_draft, get_continuous_draft, keep_continuous_separate, automatically_split_continuous, compose_chapter, integrity_check, create_backup, recover_from_backup, get_status, project_snapshot, write_export]).run(tauri::generate_context!()).expect("error while running Weave"); }
 
 #[cfg(test)]
 mod tests {
@@ -1069,7 +1166,7 @@ mod tests {
     fn reopens_persisted_manuscript_and_worldbuilding_content_from_sqlite() {
         let root = std::env::temp_dir().join(format!("weave-reopen-{}", Uuid::new_v4()));
         database_for(&root, true).unwrap();
-        let project = Project { id: "project-reopen".into(), name: "Reopen evidence".into(), directory: root.to_string_lossy().into_owned(), schema_version: 6, created_at: timestamp(), updated_at: timestamp() };
+        let project = Project { id: "project-reopen".into(), name: "Reopen evidence".into(), directory: root.to_string_lossy().into_owned(), schema_version: 7, created_at: timestamp(), updated_at: timestamp() };
         let story = Story { id: "story-reopen".into(), project_id: project.id.clone(), title: "Story".into(), position: 0 };
         let scene_set = SceneSet { id: "scene-set-reopen".into(), chapter_id: "chapter-reopen".into(), created_at: timestamp(), source_revision_id: None, active: true };
         let chapter = Chapter { id: "chapter-reopen".into(), story_id: story.id.clone(), title: "Chapter 1".into(), position: 0, active_scene_set_id: scene_set.id.clone() };

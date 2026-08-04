@@ -22,6 +22,7 @@ import type {
   ManuscriptVersionComparison,
   RestoreManuscriptVersionResult,
   MarkdownNote,
+  OutlineFile,
   NoteLink,
   StoryCanvas,
   WorldbuildingFolder,
@@ -40,6 +41,7 @@ const command = <T>(name: string, args?: Record<string, unknown>) => invoke<T>(n
 
 export class TauriProjectRepository implements ProjectRepository {
   createProject(directory: string, name: string): Promise<Project> { return command('create_project', { directory, name }); }
+  importProjectDirectory(directory: string): Promise<Project> { return command('import_project_directory', { directory }); }
   openProject(directory: string): Promise<Project> { return command('open_project', { directory }); }
   getProject(): Promise<Project> { return command('get_project'); }
   createStory(title: string): Promise<Story> { return command('create_story', { title }); }
@@ -65,6 +67,10 @@ export class TauriProjectRepository implements ProjectRepository {
   moveWorldbuildingEntry(kind: WorldbuildingEntryKind, id: string, parentId?: string, position?: number): Promise<WorldbuildingEntry[]> { return command('move_worldbuilding_entry', { kind, id, parentId, position }); }
   createMarkdownNote(title: string, markdown?: string): Promise<MarkdownNote> { return command('create_markdown_note', { title, markdown }); }
   updateMarkdownNote(noteId: string, input: { title: string; markdown: string }, expectedRevision: number): Promise<MarkdownNote> { return command('update_markdown_note', { noteId, input, expectedRevision }); }
+  createOutlineFile(title: string, markdown?: string): Promise<OutlineFile> { return command('create_outline_file', { title, markdown }); }
+  updateOutlineFile(fileId: string, input: { title: string; markdown: string }, expectedRevision: number): Promise<OutlineFile> { return command('update_outline_file', { fileId, input, expectedRevision }); }
+  deleteOutlineFile(fileId: string, expectedRevision: number): Promise<void> { return command('delete_outline_file', { fileId, expectedRevision }); }
+  listOutlineFiles(): Promise<OutlineFile[]> { return command('list_outline_files'); }
   deleteMarkdownNote(noteId: string, expectedRevision: number, mode?: 'reject' | 'remove-references'): Promise<void> { return command('delete_markdown_note', { noteId, expectedRevision, mode }); }
   listMarkdownNotes(): Promise<MarkdownNote[]> { return command('list_markdown_notes'); }
   searchMarkdownNotes(query: string): Promise<MarkdownNote[]> { return command('search_markdown_notes', { query }); }

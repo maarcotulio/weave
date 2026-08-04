@@ -14,7 +14,7 @@ const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as { Data
 import { InMemoryProjectRepository } from '../domain/repository';
 import { now } from '../domain/document';
 import { DEFAULT_EDITOR_STYLE, type EditorStyleProfile, type WritingGoals, type ManuscriptVersionSummary, type ManuscriptVersionDetail, type ManuscriptVersionComparison, type RestoreManuscriptVersionResult } from '../domain/types';
-import type { BackupRecord, OperationStatus, Project, StructuredDocument, MarkdownNote, NoteLink, StoryCanvas, WorldbuildingFolder, CanvasPosition, CanvasViewport, CanvasNode, CanvasEdge, CanvasEngine, ExcalidrawSceneState } from '../domain/types';
+import type { BackupRecord, OperationStatus, Project, StructuredDocument, MarkdownNote, OutlineFile, NoteLink, StoryCanvas, WorldbuildingFolder, CanvasPosition, CanvasViewport, CanvasNode, CanvasEdge, CanvasEngine, ExcalidrawSceneState } from '../domain/types';
 import type { SaveDocumentResult, SplitResult, DocumentHead } from '../domain/repository';
 import type { Chapter, ContinuousDraft, IntegrityReport, Revision, Scene, SceneSet, Story } from '../domain/types';
 
@@ -33,6 +33,7 @@ interface PersistedState {
   canvasNodes: CanvasNode[];
   canvasEdges: CanvasEdge[];
   worldbuildingFolders: WorldbuildingFolder[];
+  outlineFiles: OutlineFile[];
   styleProfile: EditorStyleProfile;
   writingGoals: WritingGoals;
   manuscriptVersions: unknown[];
@@ -89,6 +90,9 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
   async moveWorldbuildingEntry(kind: Parameters<InMemoryProjectRepository['moveWorldbuildingEntry']>[0], id: string, parentId?: string, position?: number): Promise<Awaited<ReturnType<InMemoryProjectRepository['moveWorldbuildingEntry']>>> { const value = await super.moveWorldbuildingEntry(kind, id, parentId, position); this.persist(); return value; }
   async createMarkdownNote(title: string, markdown?: string): Promise<MarkdownNote> { const value = await super.createMarkdownNote(title, markdown); this.persist(); return value; }
   async updateMarkdownNote(noteId: string, input: { title: string; markdown: string }, expectedRevision: number): Promise<MarkdownNote> { try { const value = await super.updateMarkdownNote(noteId, input, expectedRevision); this.persist(); return value; } catch (error) { this.persist(); throw error; } }
+  async createOutlineFile(title: string, markdown?: string): Promise<OutlineFile> { const value = await super.createOutlineFile(title, markdown); this.persist(); return value; }
+  async updateOutlineFile(fileId: string, input: { title: string; markdown: string }, expectedRevision: number): Promise<OutlineFile> { try { const value = await super.updateOutlineFile(fileId, input, expectedRevision); this.persist(); return value; } catch (error) { this.persist(); throw error; } }
+  async deleteOutlineFile(fileId: string, expectedRevision: number): Promise<void> { try { await super.deleteOutlineFile(fileId, expectedRevision); this.persist(); } catch (error) { this.persist(); throw error; } }
   async deleteMarkdownNote(noteId: string, expectedRevision: number, mode?: 'reject' | 'remove-references'): Promise<void> { try { await super.deleteMarkdownNote(noteId, expectedRevision, mode); this.persist(); } catch (error) { this.persist(); throw error; } }
   async repairNoteLink(linkId: string, targetId: string): Promise<NoteLink> { const value = await super.repairNoteLink(linkId, targetId); this.persist(); return value; }
   async createCanvas(storyId: string, title: string, engine?: CanvasEngine): Promise<StoryCanvas> { const value = await super.createCanvas(storyId, title, engine); this.persist(); return value; }
@@ -189,6 +193,7 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
       relationships: [],
       documentLinks: [],
       worldbuildingFolders: restored.worldbuildingFolders ?? [],
+      outlineFiles: restored.outlineFiles ?? [],
       markdownNotes: (restored.markdownNotes ?? []).map((note: MarkdownNote) => ({ ...note, position: note.position ?? 0 })),
       noteLinks: restored.noteLinks ?? [],
       canvases: (restored.canvases ?? []).map((canvas: StoryCanvas) => ({ ...canvas, position: canvas.position ?? 0, engine: canvas.engine ?? 'react-flow' })),
@@ -202,7 +207,7 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
     this.state.canvasNodes = this.state.canvasNodes.filter((node) => noteIds.has(node.entityId));
     this.state.canvasEdges = [];
     this.normalizeWorldbuildingPositions();
-    if (this.state.project) this.state.project.schemaVersion = Math.max(this.state.project.schemaVersion, 6);
+    if (this.state.project) this.state.project.schemaVersion = Math.max(this.state.project.schemaVersion, 7);
     this.state.status = { state: 'recovered', message: 'Recovered backup; verify the project before editing', at: now() };
     this.persist();
     return this.state.status;
@@ -260,6 +265,8 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
     if (!canvasEnginesMigration) this.database.exec('BEGIN; INSERT INTO schema_migrations(version, applied_at) VALUES (5, datetime(\'now\')); COMMIT;');
     const foldersMigration = this.database.prepare('SELECT version FROM schema_migrations WHERE version = 6').get();
     if (!foldersMigration) this.database.exec('BEGIN; INSERT INTO schema_migrations(version, applied_at) VALUES (6, datetime(\'now\')); COMMIT;');
+    const outlineMigration = this.database.prepare('SELECT version FROM schema_migrations WHERE version = 7').get();
+    if (!outlineMigration) this.database.exec('BEGIN; INSERT INTO schema_migrations(version, applied_at) VALUES (7, datetime(\'now\')); COMMIT;');
   }
 
   private loadState(): void {
@@ -272,6 +279,7 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
       relationships: [],
       documentLinks: [],
       worldbuildingFolders: value.worldbuildingFolders ?? [],
+      outlineFiles: value.outlineFiles ?? [],
       markdownNotes: (value.markdownNotes ?? []).map((note: MarkdownNote) => ({ ...note, position: note.position ?? 0 })),
       noteLinks: value.noteLinks ?? [],
       canvases: (value.canvases ?? []).map((canvas: StoryCanvas) => ({ ...canvas, position: canvas.position ?? 0, engine: canvas.engine ?? 'react-flow' })),
@@ -285,7 +293,7 @@ export class SQLiteProjectRepository extends InMemoryProjectRepository {
     this.state.canvasNodes = this.state.canvasNodes.filter((node) => noteIds.has(node.entityId));
     this.state.canvasEdges = [];
     this.normalizeWorldbuildingPositions();
-    if (this.state.project) this.state.project.schemaVersion = Math.max(this.state.project.schemaVersion, 6);
+    if (this.state.project) this.state.project.schemaVersion = Math.max(this.state.project.schemaVersion, 7);
   }
 
   private persist(): void {

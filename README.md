@@ -38,6 +38,10 @@ If Vite reports `Failed to resolve import "@excalidraw/excalidraw"`, the local d
 
 Excalidraw uses the maintained `@excalidraw/excalidraw` **0.18.1** package (MIT license; peer-compatible with React 18). Its package-bundled CSS and font assets are shipped locally with the desktop bundle, so no runtime network or collaboration service is required. The engine is intentionally not tldraw or another substitute.
 
+## Importing a folder project
+
+Desktop import accepts a new local directory with exactly these top-level folders: `manuscript`, `outline`, and `worldbuilding`. It reads regular UTF-8 `.md` files only (subfolders are supported); source files are never modified. `manuscript` files become one chapter and scene each in a single imported story, `outline` files remain independent editable Outline Markdown files, and `worldbuilding` subfolders/Markdown become the matching folder/note hierarchy. Import rejects existing `.weave` storage, extra/missing top-level entries, symlinks, invalid UTF-8, files over 10 MiB, and more than 2,000 Markdown files so it never merges into an existing project.
+
 ## Authoritative boundaries
 
 | Path | Owns |

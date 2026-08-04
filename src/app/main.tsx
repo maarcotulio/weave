@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import './styles.css';
 import './feature-pages.css';
+import './outline-files.css';
 import './search.css';
 import './ui-kit.css';
 
