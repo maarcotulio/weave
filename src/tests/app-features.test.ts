@@ -16,7 +16,7 @@ describe('writing navigation and motivation surfaces', () => {
     expect(app).toContain('Type <code>RESTORE</code> to confirm');
     expect(app).toContain('restoreManuscriptVersion');
     expect(app).toContain('Enter Focus Mode');
-    expect(app).toContain('>Export all</button>{route === \'manuscript\' && <button type="button" onClick={openMarkdownImport}');
+    expect(app).toContain('>Export all</button><button type="button" onClick={openMarkdownImport}');
     expect(app).not.toContain('id="home-workspace-tab"');
     expect(home).toContain('Writing activity heatmap');
     expect(home).toContain('Your writing rhythm');

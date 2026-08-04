@@ -1062,6 +1062,50 @@ mod tests {
     }
 
     #[test]
+    fn reopens_persisted_manuscript_and_worldbuilding_content_from_sqlite() {
+        let root = std::env::temp_dir().join(format!("weave-reopen-{}", Uuid::new_v4()));
+        database_for(&root, true).unwrap();
+        let project = Project { id: "project-reopen".into(), name: "Reopen evidence".into(), directory: root.to_string_lossy().into_owned(), schema_version: 6, created_at: timestamp(), updated_at: timestamp() };
+        let story = Story { id: "story-reopen".into(), project_id: project.id.clone(), title: "Story".into(), position: 0 };
+        let scene_set = SceneSet { id: "scene-set-reopen".into(), chapter_id: "chapter-reopen".into(), created_at: timestamp(), source_revision_id: None, active: true };
+        let chapter = Chapter { id: "chapter-reopen".into(), story_id: story.id.clone(), title: "Chapter 1".into(), position: 0, active_scene_set_id: scene_set.id.clone() };
+        let initial = Document { format_version: DOCUMENT_FORMAT_VERSION, blocks: vec![DocumentBlock { id: "block-reopen".into(), kind: "paragraph".into(), heading_level: None, alignment: None, runs: vec![TextRun { text: "First draft".into(), marks: vec![] }] }] };
+        let saved = Document { format_version: DOCUMENT_FORMAT_VERSION, blocks: vec![DocumentBlock { id: "block-reopen".into(), kind: "paragraph".into(), heading_level: None, alignment: None, runs: vec![TextRun { text: "Saved after reopen".into(), marks: vec![] }] }] };
+        let mut store = Store::default();
+        store.project = Some(project);
+        store.stories.push(story.clone());
+        store.scene_sets.push(scene_set.clone());
+        store.chapters.push(chapter.clone());
+        let document = add_document(&mut store, initial, "created").unwrap();
+        let record = store.documents.iter_mut().find(|record| record.id == document.id).unwrap();
+        record.head_revision = 2;
+        record.revisions.push(Revision { id: "revision-reopen-2".into(), document_id: document.id.clone(), number: 2, document: saved, created_at: timestamp(), reason: "manual save".into() });
+        store.scenes.push(Scene { id: "scene-reopen".into(), scene_set_id: scene_set.id, title: "Scene 1".into(), position: 0, document_id: document.id.clone() });
+        let folder = WorldbuildingFolder { id: "folder-reopen".into(), project_id: "project-reopen".into(), title: "Research".into(), parent_id: None, position: 0, created_at: timestamp(), updated_at: timestamp() };
+        let note = MarkdownNote { id: "note-reopen".into(), project_id: "project-reopen".into(), title: "Note".into(), markdown: "Persisted Markdown note".into(), folder_id: Some(folder.id.clone()), position: 0, revision: 2, created_at: timestamp(), updated_at: timestamp() };
+        let canvas = StoryCanvas { id: "canvas-reopen".into(), story_id: story.id.clone(), title: "Canvas".into(), folder_id: Some(folder.id.clone()), position: 1, viewport: CanvasViewport { x: -42.0, y: 18.0, zoom: 1.25 }, engine: default_canvas_engine(), excalidraw_state: None, revision: 3, created_at: timestamp(), updated_at: timestamp() };
+        store.worldbuilding_folders.push(folder.clone());
+        store.markdown_notes.push(note.clone());
+        store.canvases.push(canvas.clone());
+        store.canvas_nodes.push(CanvasNode { id: "canvas-node-reopen".into(), canvas_id: canvas.id.clone(), entity_id: note.id.clone(), position: CanvasPosition { x: 120.0, y: 240.0 } });
+        let state = AppState { root: Some(root.clone()), store };
+        state.persist().unwrap();
+
+        let reopened = load_store(&database_for(&root, false).unwrap()).unwrap();
+        assert_eq!(reopened.stories[0].id, story.id);
+        assert_eq!(reopened.chapters[0].id, chapter.id);
+        assert_eq!(reopened.scenes[0].document_id, document.id);
+        assert_eq!(reopened.documents[0].head_revision, 2);
+        assert_eq!(reopened.documents[0].revisions[1].document.blocks[0].runs[0].text, "Saved after reopen");
+        assert_eq!(reopened.worldbuilding_folders[0].id, folder.id);
+        assert_eq!(reopened.markdown_notes[0].markdown, "Persisted Markdown note");
+        assert_eq!(reopened.canvases[0].viewport.zoom, 1.25);
+        assert_eq!(reopened.canvas_nodes[0].position.x, 120.0);
+        assert!(root.join(".weave/files/latest.json").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn writing_metrics_ignores_malformed_activity_in_average() {
         let mut store = Store::default();
         store.writing_goals.daily_word_counts.insert("2025-01-01".into(), 100);

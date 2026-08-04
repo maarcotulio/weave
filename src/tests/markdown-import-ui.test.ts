@@ -16,6 +16,7 @@ describe('Markdown import UI contract', () => {
     expect(app).toContain('repository.createScene');
     expect(app).toContain('repository.createChapter');
     expect(app).toContain('await autosave.flush()');
+    expect(app).toContain('if (!await flushActiveMarkdownNote()) return;');
     expect(app).toContain('rollbackInReverse');
     expect(app).toContain('repository.deleteScene');
     expect(app).toContain('repository.deleteChapter');
@@ -27,11 +28,12 @@ describe('Markdown import UI contract', () => {
     expect(styles).toContain('.markdown-file-picker:focus-within');
   });
 
-  it('places Import .md immediately after Export all only on the Manuscript route', () => {
+  it('places Import .md immediately after Export all in the shared project topbar', () => {
     const app = readFileSync(join(process.cwd(), 'src/app/App.tsx'), 'utf8');
     const exportAction = '<button type="button" onClick={doExport} disabled={busy || mode === \'compose\'}>Export all</button>';
-    const manuscriptImport = "{route === 'manuscript' && <button type=\"button\" onClick={openMarkdownImport} disabled={busy || mode === 'compose'}>Import .md</button>}";
-    expect(app).toContain(`${exportAction}${manuscriptImport}`);
+    const globalImport = '<button type="button" onClick={openMarkdownImport} disabled={busy || mode === \'compose\'}>Import .md</button>';
+    expect(app).toContain(`${exportAction}${globalImport}`);
+    expect(app).not.toContain("{route === 'manuscript' && <button type=\"button\" onClick={openMarkdownImport}");
     expect(app).toContain('disabled={busy || mode === \'compose\'}>Import .md</button>');
     expect(app).not.toContain('onImport: () => void');
     expect(app).not.toContain('onImport={() =>');
