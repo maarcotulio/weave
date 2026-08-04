@@ -549,6 +549,15 @@ fn validate_store(store: &Store) -> Result<(), String> {
     for chapter_value in &store.chapters {
         if !store.scene_sets.iter().any(|set| set.id == chapter_value.active_scene_set_id && set.chapter_id == chapter_value.id && set.active) { return Err(format!("Chapter {} has no active scene set", chapter_value.id)); }
     }
+    let project = store.project.as_ref().ok_or_else(|| "Project metadata is missing".to_string())?;
+    ensure_unique_ids(store.outline_files.iter().map(|file| file.id.clone()), "outline file")?;
+    let mut outline_titles = std::collections::HashSet::new(); let mut outline_positions = std::collections::HashSet::new();
+    for file in &store.outline_files {
+        if file.project_id != project.id || file.title.trim().is_empty() || file.revision < 1 || file.position < 0 { return Err(format!("Outline file {} is invalid", file.id)); }
+        if !outline_titles.insert(file.title.to_lowercase()) { return Err(format!("Duplicate outline file title {}", file.title)); }
+        if !outline_positions.insert(file.position) { return Err(format!("Duplicate outline file position {}", file.position)); }
+    }
+    if outline_positions.iter().copied().max().map(|max| max + 1 != store.outline_files.len() as i64).unwrap_or(false) { return Err("Outline file positions are not contiguous".into()); }
     for note in &store.markdown_notes { if note.title.trim().is_empty() || note.revision < 1 { return Err(format!("Markdown note {} is invalid", note.id)); } }
     for link in &store.note_links {
         markdown_note(store, &link.note_id)?;
@@ -613,8 +622,28 @@ fn imported_document(markdown: &str) -> Document {
     Document { format_version: DOCUMENT_FORMAT_VERSION, blocks }
 }
 
+fn read_import_markdown(path: &Path, root: &Path, label: &str) -> Result<String, String> {
+    let canonical = fs::canonicalize(path).map_err(|error| format!("Cannot resolve {label}: {error}"))?;
+    if !canonical.starts_with(root) { return Err(format!("Import path escaped its selected root: {}", path.display())); }
+    let before = fs::symlink_metadata(&canonical).map_err(|error| format!("Cannot inspect {label}: {error}"))?;
+    if before.file_type().is_symlink() || !before.is_file() || before.len() > 10 * 1024 * 1024 { return Err(format!("Unsafe import file: {}", path.display())); }
+    #[cfg(unix)]
+    let mut file = { use std::os::unix::fs::OpenOptionsExt; std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(&canonical).map_err(|error| format!("Cannot open {label} safely: {error}"))? };
+    #[cfg(not(unix))]
+    let mut file = std::fs::OpenOptions::new().read(true).open(&canonical).map_err(|error| format!("Cannot open {label}: {error}"))?;
+    let opened = file.metadata().map_err(|error| error.to_string())?;
+    if opened.len() != before.len() { return Err(format!("Import file changed while opening: {}", path.display())); }
+    let mut markdown = String::new(); use std::io::Read; file.read_to_string(&mut markdown).map_err(|error| format!("Cannot read {label}: {error}"))?;
+    let after = fs::symlink_metadata(&canonical).map_err(|error| error.to_string())?;
+    if after.len() != before.len() || after.file_type().is_symlink() { return Err(format!("Import file changed while reading: {}", path.display())); }
+    Ok(markdown)
+}
+
 fn import_markdown_files(root: &Path, current: &Path, files: &mut Vec<(PathBuf, String)>, directories: &mut Vec<(PathBuf, String)>) -> Result<(), String> {
-    for entry in fs::read_dir(current).map_err(|error| format!("Cannot read import directory {}: {error}", current.display()))? {
+    let current_metadata = fs::symlink_metadata(current).map_err(|error| format!("Cannot inspect import directory {}: {error}", current.display()))?;
+    let canonical_current = fs::canonicalize(current).map_err(|error| format!("Cannot resolve import directory {}: {error}", current.display()))?;
+    if current_metadata.file_type().is_symlink() || !current_metadata.is_dir() || !canonical_current.starts_with(root) { return Err(format!("Unsafe import directory: {}", current.display())); }
+    for entry in fs::read_dir(&canonical_current).map_err(|error| format!("Cannot read import directory {}: {error}", current.display()))? {
         let entry = entry.map_err(|error| error.to_string())?; let path = entry.path(); let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
         if metadata.file_type().is_symlink() { return Err(format!("Unsafe symlink in import: {}", path.display())); }
         let relative = path.strip_prefix(root).map_err(|_| "Invalid import path")?.to_string_lossy().replace('\\', "/");
@@ -630,7 +659,7 @@ fn import_title(relative: &str) -> Result<String, String> { let title = relative
 
 #[tauri::command]
 fn import_project_directory(directory: String, app: State<'_, Mutex<AppState>>) -> Result<Project, String> {
-    let root = PathBuf::from(directory.trim()); validate_project_root(&root)?; ensure_existing_directory(&root, "import project directory")?;
+    let selected_root = PathBuf::from(directory.trim()); validate_project_root(&selected_root)?; ensure_existing_directory(&selected_root, "import project directory")?; let root = fs::canonicalize(&selected_root).map_err(|error| format!("Cannot canonicalize import project directory: {error}"))?;
     if fs::symlink_metadata(root.join(".weave")).is_ok() { return Err("The selected import folder already contains .weave".into()); }
     let mut top = vec![];
     for entry in fs::read_dir(&root).map_err(|error| error.to_string())? { let entry = entry.map_err(|error| error.to_string())?; let metadata = fs::symlink_metadata(entry.path()).map_err(|error| error.to_string())?; if metadata.file_type().is_symlink() || !metadata.is_dir() { return Err("Import root must contain only the three required folders".into()); } top.push(entry.file_name().to_string_lossy().into_owned()); }
@@ -645,13 +674,13 @@ fn import_project_directory(directory: String, app: State<'_, Mutex<AppState>>) 
     let project = Project { id: id("project"), name: name.clone(), directory: normalized, schema_version: 7, created_at: timestamp(), updated_at: timestamp() };
     let mut store = Store::default(); store.project = Some(project.clone());
     let story = Story { id: id("story"), project_id: project.id.clone(), title: name, position: 0 }; store.stories.push(story.clone());
-    for (position, (path, relative)) in manuscript.into_iter().enumerate() { let title = import_title(&relative)?; let markdown = fs::read_to_string(path).map_err(|error| format!("Cannot read manuscript {relative}: {error}"))?; let chapter_id = id("chapter"); let set = SceneSet { id: id("scene-set"), chapter_id: chapter_id.clone(), created_at: timestamp(), source_revision_id: None, active: true }; let chapter = Chapter { id: chapter_id, story_id: story.id.clone(), title: title.clone(), position: position as i64, active_scene_set_id: set.id.clone() }; let record = add_document(&mut store, imported_document(&markdown), "created")?; store.scene_sets.push(set.clone()); store.chapters.push(chapter); store.scenes.push(Scene { id: id("scene"), scene_set_id: set.id, title, position: 0, document_id: record.id }); }
-    for (position, (path, relative)) in outline.into_iter().enumerate() { let title = import_title(&relative)?; let markdown = fs::read_to_string(path).map_err(|error| format!("Cannot read outline {relative}: {error}"))?; store.outline_files.push(OutlineFile { id: id("outline-file"), project_id: project.id.clone(), title, markdown, position: position as i64, revision: 1, created_at: timestamp(), updated_at: timestamp() }); }
+    for (position, (path, relative)) in manuscript.into_iter().enumerate() { let title = import_title(&relative)?; let markdown = read_import_markdown(&path, &root, &format!("manuscript {relative}"))?; let chapter_id = id("chapter"); let set = SceneSet { id: id("scene-set"), chapter_id: chapter_id.clone(), created_at: timestamp(), source_revision_id: None, active: true }; let chapter = Chapter { id: chapter_id, story_id: story.id.clone(), title: title.clone(), position: position as i64, active_scene_set_id: set.id.clone() }; let record = add_document(&mut store, imported_document(&markdown), "created")?; store.scene_sets.push(set.clone()); store.chapters.push(chapter); store.scenes.push(Scene { id: id("scene"), scene_set_id: set.id, title, position: 0, document_id: record.id }); }
+    for (position, (path, relative)) in outline.into_iter().enumerate() { let title = import_title(&relative)?; let markdown = read_import_markdown(&path, &root, &format!("outline {relative}"))?; store.outline_files.push(OutlineFile { id: id("outline-file"), project_id: project.id.clone(), title, markdown, position: position as i64, revision: 1, created_at: timestamp(), updated_at: timestamp() }); }
     let mut folder_ids: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for (position, (_, relative)) in world_dirs.into_iter().enumerate() { let parent_path = relative.rsplit_once('/').map(|(parent, _)| parent); let parent_id = parent_path.and_then(|parent| folder_ids.get(parent).cloned()); let title = relative.rsplit('/').next().unwrap_or(&relative).to_string(); let folder = WorldbuildingFolder { id: id("world-folder"), project_id: project.id.clone(), title, parent_id, position: position as i64, created_at: timestamp(), updated_at: timestamp() }; folder_ids.insert(relative, folder.id.clone()); store.worldbuilding_folders.push(folder); }
-    for (position, (path, relative)) in world_files.into_iter().enumerate() { let title = import_title(relative.rsplit('/').next().unwrap_or(&relative))?; let markdown = fs::read_to_string(path).map_err(|error| format!("Cannot read worldbuilding {relative}: {error}"))?; let parent = relative.rsplit_once('/').and_then(|(parent, _)| folder_ids.get(parent).cloned()); store.markdown_notes.push(MarkdownNote { id: id("note"), project_id: project.id.clone(), title, markdown, folder_id: parent, position: position as i64, revision: 1, created_at: timestamp(), updated_at: timestamp() }); }
+    for (position, (path, relative)) in world_files.into_iter().enumerate() { let title = import_title(relative.rsplit('/').next().unwrap_or(&relative))?; let markdown = read_import_markdown(&path, &root, &format!("worldbuilding {relative}"))?; let parent = relative.rsplit_once('/').and_then(|(parent, _)| folder_ids.get(parent).cloned()); store.markdown_notes.push(MarkdownNote { id: id("note"), project_id: project.id.clone(), title, markdown, folder_id: parent, position: position as i64, revision: 1, created_at: timestamp(), updated_at: timestamp() }); }
     let notes = store.markdown_notes.clone(); for note in notes { store.note_links.extend(rebuild_note_links(&store, &note, &[])); }
-    let mut state = app.lock().map_err(|_| "Project lock poisoned")?; let _ = database_for(&root, true)?; state.root = Some(root); state.store = store; status(&mut state, "saved", "Project folder imported"); state.persist()?; Ok(project)
+    let cleanup_root = root.clone(); let mut state = app.lock().map_err(|_| "Project lock poisoned")?; if let Err(error) = database_for(&root, true) { return Err(error); } state.root = Some(root); state.store = store; status(&mut state, "saved", "Project folder imported"); if let Err(error) = state.persist() { state.root = None; state.store = Store::default(); let _ = fs::remove_dir_all(cleanup_root.join(".weave")); return Err(error); } Ok(project)
 }
 
 #[tauri::command]
