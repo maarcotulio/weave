@@ -4,6 +4,7 @@ interface ManuscriptOutlineProps {
   snapshot: ProjectSnapshot;
   selectedChapterId?: string;
   selectedSceneId?: string;
+  outlineFiles?: React.ReactNode;
   onSelectChapter: (story: Story, chapter: Chapter) => void;
   onSelectScene: (story: Story, chapter: Chapter, scene: Scene) => void;
   onMoveChapter: (chapter: Chapter, position: number) => void;
@@ -26,7 +27,7 @@ function readPayload(event: React.DragEvent): DragPayload | undefined {
   }
 }
 
-export function ManuscriptOutline({ snapshot, selectedChapterId, selectedSceneId, onSelectChapter, onSelectScene, onMoveChapter, onMoveScene }: ManuscriptOutlineProps) {
+export function ManuscriptOutline({ snapshot, selectedChapterId, selectedSceneId, outlineFiles, onSelectChapter, onSelectScene, onMoveChapter, onMoveScene }: ManuscriptOutlineProps) {
   const chaptersFor = (storyId: string) => snapshot.chapters.filter((chapter) => chapter.storyId === storyId).sort((a, b) => a.position - b.position);
   const scenesFor = (chapter: Chapter) => snapshot.scenes.filter((scene) => scene.sceneSetId === chapter.activeSceneSetId).sort((a, b) => a.position - b.position);
   const dropOn = (event: React.DragEvent, target: Chapter | Scene) => {
@@ -43,6 +44,7 @@ export function ManuscriptOutline({ snapshot, selectedChapterId, selectedSceneId
   };
   return <main id="manuscript-outline" className="outline-workspace" aria-label="Manuscript outline and corkboard">
     <header className="outline-head"><div><p className="eyebrow">MANUSCRIPT OUTLINE</p><h1>Corkboard</h1><p>Reorganize stories, chapters, and scenes without changing their structured documents or Markdown.</p></div><span className="outline-help">Drag cards to reorder · keyboard buttons are available on every card</span></header>
+    {outlineFiles}
     <div className="outline-board">
       {snapshot.stories.map((story) => <section className="outline-story" key={story.id} aria-labelledby={`outline-story-${story.id}`}>
         <div className="outline-story-heading"><h2 id={`outline-story-${story.id}`}>{story.title}</h2><span>{chaptersFor(story.id).length} chapters</span></div>

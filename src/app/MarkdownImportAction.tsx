@@ -13,5 +13,5 @@ export function MarkdownImportAction({ busy, run, flushDocument, flushMarkdownNo
     if (!await flushMarkdownNote()) return;
     onOpen();
   });
-  return <button type="button" onClick={open} disabled={busy}>Import .md</button>;
+  return <button type="button" onClick={open} disabled={busy}>Import</button>;
 }

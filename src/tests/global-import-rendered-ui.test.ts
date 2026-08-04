@@ -43,18 +43,18 @@ function renderProjectRoute(route: 'home' | 'manuscript' | 'outline' | 'worldbui
 }
 
 function importButton(markup: string) {
-  return markup.match(/<button[^>]*>Import \.md<\/button>/)?.[0];
+  return markup.match(/<button[^>]*>Import<\/button>/)?.[0];
 }
 
-describe('shared project Import .md UI', () => {
+describe('shared project Import UI', () => {
   it.each(['home', 'manuscript', 'outline', 'worldbuilding', 'settings'] as const)('renders enabled on the %s project route even in compose mode', (route) => {
     const button = importButton(renderProjectRoute(route, 'compose'));
     expect(button).toBeDefined();
     expect(button).not.toContain('disabled');
   });
 
-  it('keeps Import .md directly after Export all in the rendered shared topbar', () => {
+  it('keeps Import directly after Export all in the rendered shared topbar', () => {
     const markup = renderProjectRoute('manuscript', 'scene');
-    expect(markup).toMatch(/Export all<\/button><button[^>]*>Import \.md<\/button>/);
+    expect(markup).toMatch(/Export all<\/button><button[^>]*>Import<\/button>/);
   });
 });
