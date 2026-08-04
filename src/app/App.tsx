@@ -285,24 +285,26 @@ function FormDialog({ config, busy, onCancel, onSubmit }: { config: FormDialogCo
 
 type MarkdownImportTarget = 'scene' | 'chapter';
 interface ImportedMarkdownFile { name: string; markdown: string; }
+interface MarkdownImportDialogState { defaultTarget: MarkdownImportTarget; trigger?: FocusTrigger; error?: string; retry?: { files: ImportedMarkdownFile[]; target: MarkdownImportTarget }; }
 
-export function MarkdownImportDialog({ defaultTarget, canImportScene, canImportChapter, busy, onCancel, onSubmit, trigger }: { defaultTarget: MarkdownImportTarget; canImportScene: boolean; canImportChapter: boolean; busy: boolean; onCancel: () => void; onSubmit: (files: ImportedMarkdownFile[], target: MarkdownImportTarget) => void; trigger?: FocusTrigger }) {
+export function MarkdownImportDialog({ defaultTarget, canImportScene, canImportChapter, busy, error, onCancel, onRetry, onSubmit, trigger }: { defaultTarget: MarkdownImportTarget; canImportScene: boolean; canImportChapter: boolean; busy: boolean; error?: string; onCancel: () => void; onRetry?: () => void; onSubmit: (files: ImportedMarkdownFile[], target: MarkdownImportTarget) => void; trigger?: FocusTrigger }) {
   const [files, setFiles] = useState<ImportedMarkdownFile[]>([]);
   const [target, setTarget] = useState<MarkdownImportTarget>(defaultTarget);
-  const [error, setError] = useState('');
+  const [fileError, setFileError] = useState('');
   const title = 'Import Markdown into Manuscript';
   const descriptionId = 'markdown-import-description';
   const chooseFiles = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (busy) return;
     const selected = Array.from(event.target.files ?? []);
     const valid = selected.filter((file) => /\.md$/i.test(file.name));
     const invalid = selected.filter((file) => !/\.md$/i.test(file.name));
-    setError(invalid.length ? `Only .md files can be imported. Ignored: ${invalid.map((file) => file.name).join(', ')}.` : '');
+    setFileError(invalid.length ? `Only .md files can be imported. Ignored: ${invalid.map((file) => file.name).join(', ')}.` : '');
     if (!valid.length) { setFiles([]); event.target.value = ''; return; }
     try {
       setFiles(await Promise.all(valid.map(async (file) => ({ name: file.name, markdown: await file.text() }))));
     } catch (readError) {
       setFiles([]);
-      setError(readError instanceof Error ? readError.message : 'Could not read the selected Markdown file.');
+      setFileError(readError instanceof Error ? readError.message : 'Could not read the selected Markdown file.');
     } finally {
       event.target.value = '';
     }
@@ -310,10 +312,12 @@ export function MarkdownImportDialog({ defaultTarget, canImportScene, canImportC
   const ready = files.length > 0 && (target === 'scene' ? canImportScene : canImportChapter);
   return <Modal eyebrow="MARKDOWN IMPORT" title={title} onClose={onCancel} closeDisabled={busy} busy={busy} trigger={trigger} descriptionId={descriptionId}>
     <p id={descriptionId}>Choose one .md file. It becomes a new scene, or a new chapter with one scene containing the file content.</p>
-    <label className="modal-field markdown-file-picker"><span>Markdown file</span><span className="markdown-file-control"><span className="markdown-file-button">Choose a .md file</span><span className="markdown-file-hint">{files[0] ? files[0].name : 'No file selected'}</span></span><input type="file" accept=".md,text/markdown" aria-label="Choose a Markdown file" onChange={(event) => void chooseFiles(event)} /></label>
-    {error && <p className="error-message" role="alert">{error}</p>}
+    <label className="modal-field markdown-file-picker"><span>Markdown file</span><span className="markdown-file-control"><span className="markdown-file-button">Choose a .md file</span><span className="markdown-file-hint">{files[0] ? files[0].name : 'No file selected'}</span></span><input type="file" accept=".md,text/markdown" disabled={busy} aria-label="Choose a Markdown file" onChange={(event) => void chooseFiles(event)} /></label>
+    {fileError && <p className="error-message" role="alert">{fileError}</p>}
+    {busy && <p className="modal-help" role="status" aria-live="polite">Importing Markdown locally…</p>}
+    {error && <div className="error-message" role="alert" aria-live="assertive"><p>{error}</p>{onRetry && <button type="button" className="retry-button" disabled={busy} onClick={onRetry}>Retry import</button>}</div>}
     {files.length > 0 && <ul className="markdown-import-files" aria-label="Selected Markdown file">{files.map((file, index) => <li key={`${file.name}-${index}`}>{file.name}</li>)}</ul>}
-    <fieldset className="markdown-import-targets"><legend>Import as</legend><label className={target === 'scene' ? 'selected' : ''}><input type="radio" name="markdown-import-target" value="scene" checked={target === 'scene'} disabled={!canImportScene} onChange={() => setTarget('scene')} /><span><strong>New scene</strong><small>{canImportScene ? 'Add the file to the selected chapter.' : 'Select a chapter first.'}</small></span></label><label className={target === 'chapter' ? 'selected' : ''}><input type="radio" name="markdown-import-target" value="chapter" checked={target === 'chapter'} disabled={!canImportChapter} onChange={() => setTarget('chapter')} /><span><strong>New chapter</strong><small>{canImportChapter ? 'Create a chapter and its first scene from each file.' : 'Select a story first.'}</small></span></label></fieldset>
+    <fieldset className="markdown-import-targets"><legend>Import as</legend><label className={target === 'scene' ? 'selected' : ''}><input type="radio" name="markdown-import-target" value="scene" checked={target === 'scene'} disabled={busy || !canImportScene} onChange={() => setTarget('scene')} /><span><strong>New scene</strong><small>{canImportScene ? 'Add the file to the selected chapter.' : 'Select a chapter first.'}</small></span></label><label className={target === 'chapter' ? 'selected' : ''}><input type="radio" name="markdown-import-target" value="chapter" checked={target === 'chapter'} disabled={busy || !canImportChapter} onChange={() => setTarget('chapter')} /><span><strong>New chapter</strong><small>{canImportChapter ? 'Create a chapter and its first scene from the file.' : 'Select a story first.'}</small></span></label></fieldset>
     <div className="modal-actions"><button type="button" className="text-button" disabled={busy} onClick={onCancel}>Cancel</button><button type="button" className="primary-button" disabled={busy || !ready} onClick={() => onSubmit(files, target)}>Import file</button></div>
   </Modal>;
 }
@@ -511,7 +515,7 @@ export default function App() {
   const [noteAction, setNoteAction] = useState<NoteActionState>();
   const [canvasAction, setCanvasAction] = useState<CanvasActionState>();
   const [manuscriptDelete, setManuscriptDelete] = useState<ManuscriptDeleteState>();
-  const [markdownImportDialog, setMarkdownImportDialog] = useState<{ defaultTarget: MarkdownImportTarget; trigger?: FocusTrigger }>();
+  const [markdownImportDialog, setMarkdownImportDialog] = useState<MarkdownImportDialogState>();
   const [importChoiceDialog, setImportChoiceDialog] = useState<{ trigger?: FocusTrigger }>();
   const [projectFolderImportDialog, setProjectFolderImportDialog] = useState<{ trigger?: FocusTrigger }>();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -823,6 +827,8 @@ export default function App() {
   const importMarkdownFiles = (files: ImportedMarkdownFile[], target: MarkdownImportTarget) => void run(async () => {
     const dialog = markdownImportDialog;
     if (!dialog || !files.length) return;
+    setMarkdownImportDialog((current) => current ? { ...current, error: undefined, retry: { files, target } } : current);
+    try {
     await autosave.flush();
     if (target === 'scene') {
       if (!selectedChapterId) throw new Error('Select a chapter before importing a Markdown scene.');
@@ -871,6 +877,10 @@ export default function App() {
     setSelectedChapterId(importedChapters.at(-1)?.id);
     setSelectedSceneId(undefined);
     setToast({ message: `Imported ${importedChapters.length} Markdown chapter${importedChapters.length === 1 ? '' : 's'}.` });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setMarkdownImportDialog((current) => current ? { ...current, error: message, retry: { files, target } } : current);
+    }
   });
   const renameStory = (story: { id: string; title: string }) => {
     const trigger = captureFocusTrigger();
@@ -1171,7 +1181,7 @@ export default function App() {
     {restoreVersion && <RestoreVersionDialog item={restoreVersion} busy={busy} trigger={restoreVersion.trigger} onCancel={() => setRestoreVersion(undefined)} onConfirm={restoreManuscriptVersion} />}
     {importChoiceDialog && <ImportChoiceDialog busy={busy} folderAvailable={isDesktop} trigger={importChoiceDialog.trigger} onCancel={() => setImportChoiceDialog(undefined)} onChooseFolder={chooseProjectFolderImport} onChooseMarkdown={chooseMarkdownImport} />}
     {projectFolderImportDialog && <ProjectFolderImportDialog busy={busy} error={localError} trigger={projectFolderImportDialog.trigger} onCancel={() => { setProjectFolderImportDialog(undefined); setLocalError(''); }} onChoose={chooseProjectFolder} />}
-    {markdownImportDialog && <MarkdownImportDialog defaultTarget={markdownImportDialog.defaultTarget} canImportScene={Boolean(selectedChapterId)} canImportChapter={Boolean(selectedStoryId)} busy={busy} trigger={markdownImportDialog.trigger} onCancel={() => setMarkdownImportDialog(undefined)} onSubmit={importMarkdownFiles} />}
+    {markdownImportDialog && <MarkdownImportDialog defaultTarget={markdownImportDialog.defaultTarget} canImportScene={Boolean(selectedChapterId)} canImportChapter={Boolean(selectedStoryId)} busy={busy} error={markdownImportDialog.error} trigger={markdownImportDialog.trigger} onCancel={() => setMarkdownImportDialog(undefined)} onRetry={markdownImportDialog.retry ? () => importMarkdownFiles(markdownImportDialog.retry!.files, markdownImportDialog.retry!.target) : undefined} onSubmit={importMarkdownFiles} />}
     {formDialog && <FormDialog config={formDialog} busy={busy} onCancel={() => setFormDialog(undefined)} onSubmit={submitFormDialog} />}
     {worldbuildingCreateDialog && <WorldbuildingCreateDialog busy={busy} trigger={worldbuildingCreateDialog.trigger} onCancel={() => setWorldbuildingCreateDialog(undefined)} onChoice={(choice) => choice === 'note' ? createWorldbuildingNote(worldbuildingCreateDialog.trigger) : choice === 'canvas' ? createWorldbuildingCanvas(worldbuildingCreateDialog.trigger) : createWorldbuildingFolder(worldbuildingCreateDialog.trigger)} />}
     {noteCreateDialog && <NoteCreateDialog busy={busy} onCancel={() => setNoteCreateDialog(undefined)} onSubmit={submitNoteCreate} trigger={noteCreateDialog.trigger} />}

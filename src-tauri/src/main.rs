@@ -680,33 +680,49 @@ fn import_project_directory(directory: String, app: State<'_, Mutex<AppState>>) 
     for (position, (_, relative)) in world_dirs.into_iter().enumerate() { let parent_path = relative.rsplit_once('/').map(|(parent, _)| parent); let parent_id = parent_path.and_then(|parent| folder_ids.get(parent).cloned()); let title = relative.rsplit('/').next().unwrap_or(&relative).to_string(); let folder = WorldbuildingFolder { id: id("world-folder"), project_id: project.id.clone(), title, parent_id, position: position as i64, created_at: timestamp(), updated_at: timestamp() }; folder_ids.insert(relative, folder.id.clone()); store.worldbuilding_folders.push(folder); }
     for (position, (path, relative)) in world_files.into_iter().enumerate() { let title = import_title(relative.rsplit('/').next().unwrap_or(&relative))?; let markdown = read_import_markdown(&path, &root, &format!("worldbuilding {relative}"))?; let parent = relative.rsplit_once('/').and_then(|(parent, _)| folder_ids.get(parent).cloned()); store.markdown_notes.push(MarkdownNote { id: id("note"), project_id: project.id.clone(), title, markdown, folder_id: parent, position: position as i64, revision: 1, created_at: timestamp(), updated_at: timestamp() }); }
     let notes = store.markdown_notes.clone(); for note in notes { store.note_links.extend(rebuild_note_links(&store, &note, &[])); }
-    let cleanup_root = root.clone();
+    store.status = OperationStatus { state: "saved".into(), message: "Project folder imported".into(), at: timestamp() };
+    stage_project_store(&root, &store)?;
     let mut state = app.lock().map_err(|_| "Project lock poisoned")?;
-    if let Err(error) = database_for(&root, true) {
-        cleanup_new_project_storage(&cleanup_root);
-        return Err(error);
-    }
-    let previous_root = state.root.clone();
-    let previous_store = state.store.clone();
     state.root = Some(root);
     state.store = store;
-    status(&mut state, "saved", "Project folder imported");
-    if let Err(error) = state.persist() {
-        state.root = previous_root;
-        state.store = previous_store;
-        cleanup_new_project_storage(&cleanup_root);
-        return Err(format!("Could not initialize the imported project store: {error}"));
-    }
     Ok(project)
 }
 
-fn cleanup_new_project_storage(root: &Path) {
-    let weave = root.join(".weave");
-    if let Ok(metadata) = fs::symlink_metadata(&weave) {
-        if metadata.is_dir() && !metadata.file_type().is_symlink() {
-            let _ = fs::remove_dir_all(weave);
+/** Build a complete store in a unique sibling directory, then claim the final
+ * .weave directory with create_dir (which never replaces an existing path).
+ * After that claim succeeds we never remove the final directory: another
+ * process may observe or add data there while publication is finishing. */
+fn stage_project_store(root: &Path, store: &Store) -> Result<(), String> {
+    validate_project_root(root)?;
+    ensure_directory_chain(root)?;
+    let stage_root = root.join(format!(".weave-stage-{}", Uuid::new_v4()));
+    fs::create_dir(&stage_root).map_err(|error| format!("Cannot create private project staging directory: {error}"))?;
+    let staged_weave = stage_root.join(".weave");
+    let result = (|| -> Result<(), String> {
+        database_for(&stage_root, true)?;
+        let staged_state = AppState { root: Some(stage_root.clone()), store: store.clone() };
+        staged_state.persist()?;
+
+        let final_weave = root.join(".weave");
+        match fs::create_dir(&final_weave) {
+            Ok(()) => {},
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => return Err("Project storage appeared while initializing; no existing data was changed".into()),
+            Err(error) => return Err(format!("Cannot claim project storage: {error}")),
         }
+        for entry in fs::read_dir(&staged_weave).map_err(|error| format!("Cannot read private project staging data: {error}"))? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            fs::rename(entry.path(), final_weave.join(entry.file_name())).map_err(|error| format!("Cannot publish project storage safely: {error}"))?;
+        }
+        fs::remove_dir(&staged_weave).map_err(|error| format!("Cannot finalize private project staging data: {error}"))?;
+        fs::remove_dir(&stage_root).map_err(|error| format!("Cannot finalize private project staging directory: {error}"))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        // This UUID-named directory was created exclusively by this invocation.
+        // Never remove root/.weave here: it can already be visible to another process.
+        let _ = fs::remove_dir_all(&stage_root);
     }
+    result
 }
 
 #[tauri::command]
@@ -714,29 +730,13 @@ fn create_project(directory: String, name: String, app: State<'_, Mutex<AppState
     let mut state = app.lock().map_err(|_| "Project lock poisoned")?;
     let root = PathBuf::from(directory.trim());
     let directory = normalized_project_directory(&root)?;
-    let weave = root.join(".weave");
-    match fs::symlink_metadata(&weave) {
-        Ok(_) => return Err("The selected directory already contains .weave; open the existing project instead".into()),
-        Err(error) if error.kind() == ErrorKind::NotFound => {},
-        Err(error) => return Err(format!("Cannot inspect project storage: {error}")),
-    }
-    if let Err(error) = database_for(&root, true) {
-        cleanup_new_project_storage(&root);
-        return Err(error);
-    }
-    let previous_root = state.root.clone();
-    let previous_store = state.store.clone();
     let project = Project { id: id("project"), name, directory, schema_version: 7, created_at: timestamp(), updated_at: timestamp() };
-    state.root = Some(root.clone());
-    state.store = Store::default();
-    state.store.project = Some(project.clone());
-    status(&mut state, "saved", "Project created offline");
-    if let Err(error) = state.persist() {
-        state.root = previous_root;
-        state.store = previous_store;
-        cleanup_new_project_storage(&root);
-        return Err(format!("Could not initialize the local project store: {error}"));
-    }
+    let mut store = Store::default();
+    store.project = Some(project.clone());
+    store.status = OperationStatus { state: "saved".into(), message: "Project created offline".into(), at: timestamp() };
+    stage_project_store(&root, &store)?;
+    state.root = Some(root);
+    state.store = store;
     Ok(project)
 }
 
@@ -1174,6 +1174,42 @@ mod tests {
     fn normalizes_project_directory_without_accepting_traversal() {
         assert_eq!(normalized_project_directory(Path::new("/tmp//weave-project")).unwrap(), "/tmp/weave-project");
         assert!(normalized_project_directory(Path::new("/tmp/weave-project/../other")).is_err());
+    }
+
+    #[test]
+    fn staged_project_store_publishes_a_complete_reopenable_store() {
+        let root = std::env::temp_dir().join(format!("weave-stage-publish-{}", Uuid::new_v4()));
+        let project = Project { id: "project-stage".into(), name: "Staged project".into(), directory: root.to_string_lossy().into_owned(), schema_version: 7, created_at: timestamp(), updated_at: timestamp() };
+        let mut store = Store::default();
+        store.project = Some(project.clone());
+        store.status = OperationStatus { state: "saved".into(), message: "Project created offline".into(), at: timestamp() };
+
+        stage_project_store(&root, &store).unwrap();
+
+        assert!(root.join(".weave/project.db").is_file());
+        assert!(root.join(".weave/files/latest.json").is_file());
+        let mut reopened = AppState::default();
+        assert_eq!(open_existing_project(root.to_string_lossy().into_owned(), &mut reopened).unwrap().id, project.id);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn staged_project_store_never_removes_preexisting_storage_on_publish_collision() {
+        let root = std::env::temp_dir().join(format!("weave-stage-collision-{}", Uuid::new_v4()));
+        let weave = root.join(".weave");
+        fs::create_dir_all(&weave).unwrap();
+        let sentinel = weave.join("concurrent-data.txt");
+        fs::write(&sentinel, "do not remove").unwrap();
+        let project = Project { id: "project-stage-collision".into(), name: "Collision".into(), directory: root.to_string_lossy().into_owned(), schema_version: 7, created_at: timestamp(), updated_at: timestamp() };
+        let mut store = Store::default();
+        store.project = Some(project);
+
+        let error = stage_project_store(&root, &store).unwrap_err();
+
+        assert!(error.contains("appeared while initializing"));
+        assert_eq!(fs::read_to_string(&sentinel).unwrap(), "do not remove");
+        assert!(!fs::read_dir(&root).unwrap().any(|entry| entry.unwrap().file_name().to_string_lossy().starts_with(".weave-stage-")));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
