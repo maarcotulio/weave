@@ -80,12 +80,17 @@ describe('approved UI rework wiring', () => {
     expect(home.slice(headerEnd)).not.toContain('className="home-actions"');
   });
 
-  it('uses the page surface for the Files tree while preserving its accessible tree label', () => {
+  it('blends the Files tree into the sidebar surface while preserving its accessible tree label', () => {
     const app = source('src/app/App.tsx');
     const styles = source('src/app/styles.css');
     expect(app).toContain('<h2>Files</h2>');
     expect(app).toContain('aria-label="Worldbuilding files"');
-    expect(styles).toContain('.worldbuilding-file-tree { margin-bottom: 22px; padding: 8px 2px; background: var(--bg); border: 0; }');
+    // The Files tree must not override the sidebar's own background (var(--panel-strong)) with
+    // the page-surface token (var(--bg)) — that mismatch rendered as a stray darker box inside
+    // the sidebar, most visible in dark mode. It should inherit the sidebar's background instead,
+    // same as the analogous Manuscript tree (.tree-item et al., which never set a background).
+    expect(styles).toContain('.worldbuilding-file-tree { margin-bottom: 22px; padding: 8px 2px; }');
+    expect(styles).not.toContain('.worldbuilding-file-tree { margin-bottom: 22px; padding: 8px 2px; background: var(--bg); border: 0; }');
     expect(styles).toContain('.worldbuilding-file-actions button:hover, .worldbuilding-file-actions button:focus-visible');
   });
 });
