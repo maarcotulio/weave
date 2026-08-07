@@ -1097,7 +1097,7 @@ export default function App() {
     await refresh();
     await openWorldbuildingTab({ kind: 'note', id: note.id });
   });
-  const createWorldbuildingCanvas = (trigger = captureFocusTrigger()) => void run(async () => { await autosave.flush(); setWorldbuildingCreateDialog(undefined); if (!selectedStoryId) { setLocalError('Choose a manuscript story before creating a local note canvas.'); return; } setCanvasDialog({ storyId: selectedStoryId, trigger }); });
+  const createWorldbuildingCanvas = (trigger = captureFocusTrigger()) => void run(async () => { await autosave.flush(); setWorldbuildingCreateDialog(undefined); if (!selectedStoryId) { setToast({ message: 'Choose a manuscript story before creating a local note canvas.', tone: 'error' }); return; } setCanvasDialog({ storyId: selectedStoryId, trigger }); });
   const submitFolderCreate = (title: string) => void run(async () => { const folder = await repository.createWorldbuildingFolder(title); setFolderCreateDialog(undefined); setWorldbuildingCreateDialog(undefined); await refresh(); setToast({ message: `Folder “${folder.title}” created.` }); });
   const submitCanvasChoice = (title: string, engine: CanvasEngine) => void run(async () => { const choice = canvasDialog; if (!choice) return; const canvas = await repository.createCanvas(choice.storyId, title, engine); setCanvasDialog(undefined); await refresh(); await openWorldbuildingTab({ kind: 'canvas', id: canvas.id }); });
   const openWorldbuildingTab = async (tab: WorldbuildingTab, options?: { noteFlushed?: boolean }) => {
