@@ -1,3 +1,18 @@
+// @vitest-environment jsdom
+//
+// This file is the only one in the suite that does real DOM rendering, so it
+// manages its own per-test JSDOM instance below (installDom) rather than
+// relying on vitest's shared environment globals. But react-dom decides
+// once, at module import time, whether the runtime supports real 'input'
+// events (see react-dom's `canUseDOM`/`isInputEventSupported`) - and without
+// the directive above, this file's default 'node' test environment has no
+// `window`/`document` yet when the static `react-dom/client` import below
+// runs, so that one-time detection freezes as "unsupported" and react-dom
+// falls back to a legacy IE input-event polyfill for every text input in
+// this file, which then throws (`attachEvent` doesn't exist in jsdom) and
+// silently swallows real typing. The directive makes vitest set up a global
+// jsdom before any import in this file runs, so that detection sees a real
+// DOM and computes correctly, once, for the whole file.
 import React, { useMemo, useState } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -38,6 +53,18 @@ function installDom() {
 
 async function render(view: React.ReactNode) {
   await act(async () => { root!.render(view); });
+}
+
+/** React tracks the native value setter to detect real changes; assigning
+ * `input.value` directly bypasses that tracker, so a plain `input` event
+ * dispatch afterward is silently dropped by React's onChange. Going through
+ * the native setter first (the standard workaround for simulating typing
+ * without a testing-library `fireEvent`) keeps the tracker in sync so the
+ * dispatched event actually reaches the component's onChange handler. */
+function typeInto(input: HTMLInputElement, value: string) {
+  const nativeSetter = Object.getOwnPropertyDescriptor(dom!.window.HTMLInputElement.prototype, 'value')!.set!;
+  nativeSetter.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 async function press(element: Element, key: string, shiftKey = false) {
@@ -164,7 +191,7 @@ describe('interactive import dialogs', () => {
     const submitted = vi.fn();
     await render(<ProjectFormHarness desktop={false} onSubmit={submitted} onPickerRetry={vi.fn()} onCancel={vi.fn()} />);
     const input = document.querySelector('[role="dialog"] input') as HTMLInputElement;
-    await act(async () => { input.value = '/tmp/edited-project'; input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); });
+    await act(async () => { typeInto(input, '/tmp/edited-project'); });
     const submit = [...document.querySelectorAll('[role="dialog"] button')].find((button) => button.textContent === 'Continue')! as HTMLButtonElement;
     await act(async () => { submit.click(); });
     const retry = [...document.querySelectorAll('[role="alert"] button')].find((button) => button.textContent === 'Retry')! as HTMLButtonElement;

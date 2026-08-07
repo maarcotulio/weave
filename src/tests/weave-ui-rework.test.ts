@@ -93,4 +93,19 @@ describe('approved UI rework wiring', () => {
     expect(styles).not.toContain('.worldbuilding-file-tree { margin-bottom: 22px; padding: 8px 2px; background: var(--bg); border: 0; }');
     expect(styles).toContain('.worldbuilding-file-actions button:hover, .worldbuilding-file-actions button:focus-visible');
   });
+
+  it('warns instead of claiming SQLite persistence when the welcome screen is not running in the desktop app', () => {
+    const app = source('src/app/App.tsx');
+    const welcomeStart = app.indexOf('if (!snapshot) return');
+    const welcomeEnd = app.indexOf('formDialog && <FormDialog', welcomeStart);
+    const welcome = app.slice(welcomeStart, welcomeEnd);
+    // The SQLite/`.weave` persistence claim only appears on the real desktop path.
+    expect(welcome).toContain("isDesktop ? <p className=\"welcome-copy\">Weave keeps your manuscript, revisions, SQLite database");
+    // The non-desktop (browser fallback) path gets an honest warning instead, not the same claim.
+    expect(welcome).toContain('modal-warning');
+    expect(welcome).toContain('Browser preview — nothing is saved');
+    expect(welcome).toContain('npm run desktop:dev');
+    // The bottom status line also stops claiming SQLite outside the desktop app.
+    expect(welcome).toContain("isDesktop ? 'local-only · SQLite · revisioned' : 'browser preview · nothing persisted'");
+  });
 });
