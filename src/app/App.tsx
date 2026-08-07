@@ -870,8 +870,8 @@ export default function App() {
   const createOutlineFile = (title: string) => void run(async () => { await repository.createOutlineFile(title); await refresh(); });
   const saveOutlineFile = (file: import('../domain/types').OutlineFile, input: { title: string; markdown: string }) => void run(async () => { await repository.updateOutlineFile(file.id, input, file.revision); await refresh(); });
   const deleteOutlineFile = (file: import('../domain/types').OutlineFile) => void run(async () => { await repository.deleteOutlineFile(file.id, file.revision); await refresh(); });
-  const addScene = () => void run(async () => { if (!selectedChapterId) return; const scene = await repository.createScene(selectedChapterId, `Scene ${scenes.length + 1}`); await refresh(); setSelectedSceneId(scene.id); });
-  const addChapter = () => void run(async () => { if (!selectedStoryId) return; const chapterNumber = (snapshot?.chapters.filter((item) => item.storyId === selectedStoryId).length ?? 0) + 1; await repository.createChapter(selectedStoryId, `Chapter ${chapterNumber}`); await refresh(false); });
+  const addScene = () => void run(async () => { if (!selectedChapterId) return; await autosave.flush(); const scene = await repository.createScene(selectedChapterId, `Scene ${scenes.length + 1}`); await refresh(); setSelectedSceneId(scene.id); });
+  const addChapter = () => void run(async () => { if (!selectedStoryId) return; await autosave.flush(); const chapterNumber = (snapshot?.chapters.filter((item) => item.storyId === selectedStoryId).length ?? 0) + 1; await repository.createChapter(selectedStoryId, `Chapter ${chapterNumber}`); await refresh(false); });
   const importMarkdownFiles = (files: ImportedMarkdownFile[], target: MarkdownImportTarget) => void run(async () => {
     const dialog = markdownImportDialog;
     if (!dialog || !files.length) return;
