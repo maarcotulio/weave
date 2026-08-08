@@ -15,7 +15,7 @@ Weave is a local-only Tauri 2 desktop app for writing and worldbuilding. A React
 - **Worldbuilding, page notes, and selectable canvases:** local Markdown notes open in persistent page-oriented writing surfaces, while each new story canvas explicitly chooses React Flow or Excalidraw. React Flow projections and Excalidraw scene state are persisted locally.
 - **Markdown-notes-only React Flow clarification:** React Flow canvases limit nodes to Markdown notes and resolved Markdown links; previous generic worldbuilding entities, scene nodes, relationships, and freeform drawing are not part of that projection, and the legacy backend code for those entities has been removed.
 - **Dark mode:** the renderer supports persisted light/dark themes with token-driven surfaces, editor controls, dialogs, and React Flow overrides.
-- **Single global sidebar:** Manuscript, Worldbuilding, Outline, and Settings share one workspace sidebar (a 2×2 navigation grid) instead of separate per-workspace sidebars.
+- **Single global sidebar:** Manuscript, Worldbuilding, Outline, and Search share one workspace sidebar (a 2×2 navigation grid) instead of separate per-workspace sidebars.
 - **Native project folder picker:** creating or opening a project uses the desktop OS's native folder picker (the Tauri dialog plugin) instead of a typed path; project directories are validated as absolute, and recent projects are remembered across sessions.
 
 ## Product patterns
