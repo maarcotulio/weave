@@ -59,6 +59,12 @@ Desktop import accepts a new local directory with exactly these top-level folder
 
 Both items previously listed here have shipped and now live under Completed phases above: the single-sidebar UX correction, and native file-picker support for choosing project folders. No further roadmap items are currently queued; recent work has been bug fixes and polish on existing features (autosave/save-loss fixes, Worldbuilding legacy-code cleanup, and UI consistency fixes).
 
+## Support
+
+If you enjoyed the project, you can leave a small donation on Ko-fi.
+
+<a href='https://ko-fi.com/juulius' target='_blank'><img height='36' style='border:0px;height:36px;' src='https://cdn.ko-fi.com/cdn/kofi5.png?v=3' border='0' alt='Buy Me a Coffee at ko-fi.com' /></a>
+
 ## License
 
 Weave is released under the [MIT License](LICENSE).
